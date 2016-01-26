@@ -514,6 +514,13 @@ config OID_REGISTRY
 config UCS2_STRING
         tristate
 
+config LIST_BATCHING
+	def_bool y if ARCH_USE_LIST_BATCHING
+	depends on SMP
+
+config ARCH_USE_LIST_BATCHING
+	bool
+
 source "lib/fonts/Kconfig"
 
 config SG_SPLIT
