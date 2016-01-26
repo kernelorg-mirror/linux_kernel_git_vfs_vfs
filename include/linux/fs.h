@@ -9,6 +9,7 @@
 #include <linux/stat.h>
 #include <linux/cache.h>
 #include <linux/list.h>
+#include <linux/list_batch.h>
 #include <linux/list_lru.h>
 #include <linux/llist.h>
 #include <linux/radix-tree.h>
@@ -1403,6 +1404,7 @@ struct super_block {
 	/* s_inode_list_lock protects s_inodes */
 	spinlock_t		s_inode_list_lock ____cacheline_aligned_in_smp;
 	struct list_head	s_inodes;	/* all inodes */
+	struct list_batch	s_list_batch;
 };
 
 extern struct timespec current_fs_time(struct super_block *sb);

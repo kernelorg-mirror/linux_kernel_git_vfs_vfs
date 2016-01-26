@@ -424,19 +424,16 @@ static void inode_lru_list_del(struct inode *inode)
  */
 void inode_sb_list_add(struct inode *inode)
 {
-	spin_lock(&inode->i_sb->s_inode_list_lock);
-	list_add(&inode->i_sb_list, &inode->i_sb->s_inodes);
-	spin_unlock(&inode->i_sb->s_inode_list_lock);
+	do_list_batch(lb_cmd_add, &inode->i_sb->s_inode_list_lock,
+			&inode->i_sb->s_list_batch, &inode->i_sb_list);
 }
 EXPORT_SYMBOL_GPL(inode_sb_list_add);
 
 static inline void inode_sb_list_del(struct inode *inode)
 {
-	if (!list_empty(&inode->i_sb_list)) {
-		spin_lock(&inode->i_sb->s_inode_list_lock);
-		list_del_init(&inode->i_sb_list);
-		spin_unlock(&inode->i_sb->s_inode_list_lock);
-	}
+	if (!list_empty(&inode->i_sb_list))
+		do_list_batch(lb_cmd_del_init, &inode->i_sb->s_inode_list_lock,
+				&inode->i_sb->s_list_batch, &inode->i_sb_list);
 }
 
 static unsigned long hash(struct super_block *sb, unsigned long hashval)
