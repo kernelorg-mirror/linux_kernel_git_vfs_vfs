@@ -356,6 +356,31 @@ static inline int do_refcount_check(struct mount *mnt, int count)
 	return mnt_get_count(mnt) > count;
 }
 
+/**
+ * would_propagate - check whether @from would propagate mounts to @to
+ * @from: shared mount
+ * @to:   mount to check
+ *
+ * If @from propagates mounts to @to, @from and @to must either be peers
+ * or one of the masters in the hierarchy of masters of @to must be a
+ * peer of @from.
+ *
+ * Context: This function expects namespace_lock() to be held.
+ * Return: If @from propagates to @to, true is returned, false if not.
+ */
+bool would_propagate(struct mount *from, struct mount *to)
+{
+	if (!IS_MNT_SHARED(from))
+		return false;
+
+	for (struct mount *m = to; m; m = m->mnt_master) {
+		if (peers(from, m))
+			return true;
+	}
+
+	return false;
+}
+
 /*
  * check if the mount 'mnt' can be unmounted successfully.
  * @mnt: the mount to be checked for unmount
