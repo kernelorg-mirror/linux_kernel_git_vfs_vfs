@@ -49,6 +49,15 @@ struct block_device *I_BDEV(struct inode *inode)
 }
 EXPORT_SYMBOL(I_BDEV);
 
+/* @bdev_handle will become private to block/blk.h soon. */
+struct block_device *F_BDEV(struct file *f_bdev)
+{
+	struct bdev_handle *handle = f_bdev->private_data;
+	WARN_ON(f_bdev->f_op != &def_blk_fops);
+	return handle->bdev;
+}
+EXPORT_SYMBOL(F_BDEV);
+
 static void bdev_write_inode(struct block_device *bdev)
 {
 	struct inode *inode = bdev->bd_inode;
@@ -368,12 +377,12 @@ static struct file_system_type bd_type = {
 };
 
 struct super_block *blockdev_superblock __ro_after_init;
+struct vfsmount *blockdev_mnt __ro_after_init;
 EXPORT_SYMBOL_GPL(blockdev_superblock);
 
 void __init bdev_cache_init(void)
 {
 	int err;
-	static struct vfsmount *bd_mnt __ro_after_init;
 
 	bdev_cachep = kmem_cache_create("bdev_cache", sizeof(struct bdev_inode),
 			0, (SLAB_HWCACHE_ALIGN|SLAB_RECLAIM_ACCOUNT|
@@ -382,10 +391,10 @@ void __init bdev_cache_init(void)
 	err = register_filesystem(&bd_type);
 	if (err)
 		panic("Cannot register bdev pseudo-fs");
-	bd_mnt = kern_mount(&bd_type);
-	if (IS_ERR(bd_mnt))
+	blockdev_mnt = kern_mount(&bd_type);
+	if (IS_ERR(blockdev_mnt))
 		panic("Cannot create bdev pseudo-fs");
-	blockdev_superblock = bd_mnt->mnt_sb;   /* For writeback */
+	blockdev_superblock = blockdev_mnt->mnt_sb;   /* For writeback */
 }
 
 struct block_device *bdev_alloc(struct gendisk *disk, u8 partno)
@@ -910,6 +919,93 @@ free_handle:
 	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL(bdev_open_by_dev);
+
+static unsigned blk_to_file_flags(blk_mode_t mode)
+{
+	unsigned int flags = 0;
+
+	if ((mode & (BLK_OPEN_READ | BLK_OPEN_WRITE)) ==
+	    (BLK_OPEN_READ | BLK_OPEN_WRITE))
+		flags |= O_RDWR;
+	else if (mode & BLK_OPEN_WRITE)
+		flags |= O_WRONLY;
+	else
+		flags |= O_RDONLY;
+
+	/*
+	 * O_EXCL is one of those flags that the VFS clears once it's done with
+	 * the operation. So don't raise it here either.
+	 */
+	if (mode & BLK_OPEN_NDELAY)
+		flags |= O_NDELAY;
+
+	/*
+	 * If BLK_OPEN_WRITE_IOCTL is set then this is a historical quirk
+	 * associated with the floppy driver where it has allowed ioctls if the
+	 * file was opened for writing, but does not allow reads or writes.
+	 * Make sure that this quirk is reflected in @f_flags.
+	 */
+	if (mode & BLK_OPEN_WRITE_IOCTL)
+		flags |= O_RDWR | O_WRONLY;
+
+	return flags;
+}
+
+struct file *bdev_file_open_by_dev(dev_t dev, blk_mode_t mode, void *holder,
+				   const struct blk_holder_ops *hops)
+{
+	struct file *file;
+	struct bdev_handle *handle;
+	unsigned int flags;
+
+	handle = bdev_open_by_dev(dev, mode, holder, hops);
+	if (IS_ERR(handle))
+		return ERR_CAST(handle);
+
+	flags = blk_to_file_flags(mode);
+	file = alloc_file_pseudo(handle->bdev->bd_inode, blockdev_mnt, "",
+				 flags | O_LARGEFILE, &def_blk_fops);
+	if (IS_ERR(file)) {
+		bdev_release(handle);
+		return file;
+	}
+	ihold(handle->bdev->bd_inode);
+
+	file->f_mode |= FMODE_BUF_RASYNC | FMODE_CAN_ODIRECT | FMODE_NOACCOUNT;
+	if (bdev_nowait(handle->bdev))
+		file->f_mode |= FMODE_NOWAIT;
+
+	file->f_mapping = handle->bdev->bd_inode->i_mapping;
+	file->f_wb_err = filemap_sample_wb_err(file->f_mapping);
+	file->private_data = handle;
+	return file;
+}
+EXPORT_SYMBOL(bdev_file_open_by_dev);
+
+struct file *bdev_file_open_by_path(const char *path, blk_mode_t mode,
+				    void *holder,
+				    const struct blk_holder_ops *hops)
+{
+	struct file *file;
+	dev_t dev;
+	int error;
+
+	error = lookup_bdev(path, &dev);
+	if (error)
+		return ERR_PTR(error);
+
+	file = bdev_file_open_by_dev(dev, mode, holder, hops);
+	if (!IS_ERR(file) && (mode & BLK_OPEN_WRITE)) {
+		struct bdev_handle *handle = file->private_data;
+		if (bdev_read_only(handle->bdev)) {
+			fput(file);
+			file = ERR_PTR(-EACCES);
+		}
+	}
+
+	return file;
+}
+EXPORT_SYMBOL(bdev_file_open_by_path);
 
 /**
  * bdev_open_by_path - open a block device by name
