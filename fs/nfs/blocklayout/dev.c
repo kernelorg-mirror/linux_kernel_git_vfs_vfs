@@ -25,17 +25,17 @@ bl_free_device(struct pnfs_block_dev *dev)
 	} else {
 		if (dev->pr_registered) {
 			const struct pr_ops *ops =
-				dev->bdev_handle->bdev->bd_disk->fops->pr_ops;
+				F_BDEV(dev->f_bdev)->bd_disk->fops->pr_ops;
 			int error;
 
-			error = ops->pr_register(dev->bdev_handle->bdev,
+			error = ops->pr_register(F_BDEV(dev->f_bdev),
 				dev->pr_key, 0, false);
 			if (error)
 				pr_err("failed to unregister PR key.\n");
 		}
 
-		if (dev->bdev_handle)
-			bdev_release(dev->bdev_handle);
+		if (dev->f_bdev)
+			fput(dev->f_bdev);
 	}
 }
 
@@ -169,7 +169,7 @@ static bool bl_map_simple(struct pnfs_block_dev *dev, u64 offset,
 	map->start = dev->start;
 	map->len = dev->len;
 	map->disk_offset = dev->disk_offset;
-	map->bdev = dev->bdev_handle->bdev;
+	map->bdev = F_BDEV(dev->f_bdev);
 	return true;
 }
 
@@ -236,26 +236,26 @@ bl_parse_simple(struct nfs_server *server, struct pnfs_block_dev *d,
 		struct pnfs_block_volume *volumes, int idx, gfp_t gfp_mask)
 {
 	struct pnfs_block_volume *v = &volumes[idx];
-	struct bdev_handle *bdev_handle;
+	struct file *f_bdev;
 	dev_t dev;
 
 	dev = bl_resolve_deviceid(server, v, gfp_mask);
 	if (!dev)
 		return -EIO;
 
-	bdev_handle = bdev_open_by_dev(dev, BLK_OPEN_READ | BLK_OPEN_WRITE,
+	f_bdev = bdev_file_open_by_dev(dev, BLK_OPEN_READ | BLK_OPEN_WRITE,
 				       NULL, NULL);
-	if (IS_ERR(bdev_handle)) {
+	if (IS_ERR(f_bdev)) {
 		printk(KERN_WARNING "pNFS: failed to open device %d:%d (%ld)\n",
-			MAJOR(dev), MINOR(dev), PTR_ERR(bdev_handle));
-		return PTR_ERR(bdev_handle);
+			MAJOR(dev), MINOR(dev), PTR_ERR(f_bdev));
+		return PTR_ERR(f_bdev);
 	}
-	d->bdev_handle = bdev_handle;
-	d->len = bdev_nr_bytes(bdev_handle->bdev);
+	d->f_bdev = f_bdev;
+	d->len = bdev_nr_bytes(F_BDEV(f_bdev));
 	d->map = bl_map_simple;
 
 	printk(KERN_INFO "pNFS: using block device %s\n",
-		bdev_handle->bdev->bd_disk->disk_name);
+		F_BDEV(f_bdev)->bd_disk->disk_name);
 	return 0;
 }
 
@@ -300,10 +300,10 @@ bl_validate_designator(struct pnfs_block_volume *v)
 	}
 }
 
-static struct bdev_handle *
+static struct file *
 bl_open_path(struct pnfs_block_volume *v, const char *prefix)
 {
-	struct bdev_handle *bdev_handle;
+	struct file *f_bdev;
 	const char *devname;
 
 	devname = kasprintf(GFP_KERNEL, "/dev/disk/by-id/%s%*phN",
@@ -311,15 +311,15 @@ bl_open_path(struct pnfs_block_volume *v, const char *prefix)
 	if (!devname)
 		return ERR_PTR(-ENOMEM);
 
-	bdev_handle = bdev_open_by_path(devname, BLK_OPEN_READ | BLK_OPEN_WRITE,
+	f_bdev = bdev_file_open_by_path(devname, BLK_OPEN_READ | BLK_OPEN_WRITE,
 					NULL, NULL);
-	if (IS_ERR(bdev_handle)) {
+	if (IS_ERR(f_bdev)) {
 		pr_warn("pNFS: failed to open device %s (%ld)\n",
-			devname, PTR_ERR(bdev_handle));
+			devname, PTR_ERR(f_bdev));
 	}
 
 	kfree(devname);
-	return bdev_handle;
+	return f_bdev;
 }
 
 static int
@@ -327,7 +327,7 @@ bl_parse_scsi(struct nfs_server *server, struct pnfs_block_dev *d,
 		struct pnfs_block_volume *volumes, int idx, gfp_t gfp_mask)
 {
 	struct pnfs_block_volume *v = &volumes[idx];
-	struct bdev_handle *bdev_handle;
+	struct file *f_bdev;
 	const struct pr_ops *ops;
 	int error;
 
@@ -340,32 +340,32 @@ bl_parse_scsi(struct nfs_server *server, struct pnfs_block_dev *d,
 	 * On other distributions like Debian, the default SCSI by-id path will
 	 * point to the dm-multipath device if one exists.
 	 */
-	bdev_handle = bl_open_path(v, "dm-uuid-mpath-0x");
-	if (IS_ERR(bdev_handle))
-		bdev_handle = bl_open_path(v, "wwn-0x");
-	if (IS_ERR(bdev_handle))
-		return PTR_ERR(bdev_handle);
-	d->bdev_handle = bdev_handle;
+	f_bdev = bl_open_path(v, "dm-uuid-mpath-0x");
+	if (IS_ERR(f_bdev))
+		f_bdev = bl_open_path(v, "wwn-0x");
+	if (IS_ERR(f_bdev))
+		return PTR_ERR(f_bdev);
+	d->f_bdev = f_bdev;
 
-	d->len = bdev_nr_bytes(d->bdev_handle->bdev);
+	d->len = bdev_nr_bytes(F_BDEV(d->f_bdev));
 	d->map = bl_map_simple;
 	d->pr_key = v->scsi.pr_key;
 
 	pr_info("pNFS: using block device %s (reservation key 0x%llx)\n",
-		d->bdev_handle->bdev->bd_disk->disk_name, d->pr_key);
+		F_BDEV(d->f_bdev)->bd_disk->disk_name, d->pr_key);
 
-	ops = d->bdev_handle->bdev->bd_disk->fops->pr_ops;
+	ops = F_BDEV(d->f_bdev)->bd_disk->fops->pr_ops;
 	if (!ops) {
 		pr_err("pNFS: block device %s does not support reservations.",
-				d->bdev_handle->bdev->bd_disk->disk_name);
+				F_BDEV(d->f_bdev)->bd_disk->disk_name);
 		error = -EINVAL;
 		goto out_blkdev_put;
 	}
 
-	error = ops->pr_register(d->bdev_handle->bdev, 0, d->pr_key, true);
+	error = ops->pr_register(F_BDEV(d->f_bdev), 0, d->pr_key, true);
 	if (error) {
 		pr_err("pNFS: failed to register key for block device %s.",
-				d->bdev_handle->bdev->bd_disk->disk_name);
+				F_BDEV(d->f_bdev)->bd_disk->disk_name);
 		goto out_blkdev_put;
 	}
 
@@ -373,7 +373,7 @@ bl_parse_scsi(struct nfs_server *server, struct pnfs_block_dev *d,
 	return 0;
 
 out_blkdev_put:
-	bdev_release(d->bdev_handle);
+	fput(d->f_bdev);
 	return error;
 }
 
