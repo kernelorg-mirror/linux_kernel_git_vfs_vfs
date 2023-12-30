@@ -50,10 +50,10 @@ void nvmet_bdev_set_limits(struct block_device *bdev, struct nvme_id_ns *id)
 
 void nvmet_bdev_ns_disable(struct nvmet_ns *ns)
 {
-	if (ns->bdev_handle) {
-		bdev_release(ns->bdev_handle);
+	if (ns->f_bdev) {
+		fput(ns->f_bdev);
 		ns->bdev = NULL;
-		ns->bdev_handle = NULL;
+		ns->f_bdev = NULL;
 	}
 }
 
@@ -85,18 +85,18 @@ int nvmet_bdev_ns_enable(struct nvmet_ns *ns)
 	if (ns->buffered_io)
 		return -ENOTBLK;
 
-	ns->bdev_handle = bdev_open_by_path(ns->device_path,
+	ns->f_bdev = bdev_file_open_by_path(ns->device_path,
 				BLK_OPEN_READ | BLK_OPEN_WRITE, NULL, NULL);
-	if (IS_ERR(ns->bdev_handle)) {
-		ret = PTR_ERR(ns->bdev_handle);
+	if (IS_ERR(ns->f_bdev)) {
+		ret = PTR_ERR(ns->f_bdev);
 		if (ret != -ENOTBLK) {
 			pr_err("failed to open block device %s: (%d)\n",
 					ns->device_path, ret);
 		}
-		ns->bdev_handle = NULL;
+		ns->f_bdev = NULL;
 		return ret;
 	}
-	ns->bdev = ns->bdev_handle->bdev;
+	ns->bdev = F_BDEV(ns->f_bdev);
 	ns->size = bdev_nr_bytes(ns->bdev);
 	ns->blksize_shift = blksize_bits(bdev_logical_block_size(ns->bdev));
 
