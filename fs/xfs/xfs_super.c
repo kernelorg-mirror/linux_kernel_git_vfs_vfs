@@ -362,16 +362,16 @@ STATIC int
 xfs_blkdev_get(
 	xfs_mount_t		*mp,
 	const char		*name,
-	struct bdev_handle	**handlep)
+	struct file		**f_bdevp)
 {
 	int			error = 0;
 
-	*handlep = bdev_open_by_path(name,
+	*f_bdevp = bdev_file_open_by_path(name,
 		BLK_OPEN_READ | BLK_OPEN_WRITE | BLK_OPEN_RESTRICT_WRITES,
 		mp->m_super, &fs_holder_ops);
-	if (IS_ERR(*handlep)) {
-		error = PTR_ERR(*handlep);
-		*handlep = NULL;
+	if (IS_ERR(*f_bdevp)) {
+		error = PTR_ERR(*f_bdevp);
+		*f_bdevp = NULL;
 		xfs_warn(mp, "Invalid device [%s], error=%d", name, error);
 	}
 
@@ -436,26 +436,25 @@ xfs_open_devices(
 {
 	struct super_block	*sb = mp->m_super;
 	struct block_device	*ddev = sb->s_bdev;
-	struct bdev_handle	*logdev_handle = NULL, *rtdev_handle = NULL;
+	struct file		*f_logdev = NULL, *f_rtdev = NULL;
 	int			error;
 
 	/*
 	 * Open real time and log devices - order is important.
 	 */
 	if (mp->m_logname) {
-		error = xfs_blkdev_get(mp, mp->m_logname, &logdev_handle);
+		error = xfs_blkdev_get(mp, mp->m_logname, &f_logdev);
 		if (error)
 			return error;
 	}
 
 	if (mp->m_rtname) {
-		error = xfs_blkdev_get(mp, mp->m_rtname, &rtdev_handle);
+		error = xfs_blkdev_get(mp, mp->m_rtname, &f_rtdev);
 		if (error)
 			goto out_close_logdev;
 
-		if (rtdev_handle->bdev == ddev ||
-		    (logdev_handle &&
-		     rtdev_handle->bdev == logdev_handle->bdev)) {
+		if (F_BDEV(f_rtdev) == ddev ||
+		    (f_logdev && F_BDEV(f_rtdev) == F_BDEV(f_logdev))) {
 			xfs_warn(mp,
 	"Cannot mount filesystem with identical rtdev and ddev/logdev.");
 			error = -EINVAL;
@@ -467,25 +466,25 @@ xfs_open_devices(
 	 * Setup xfs_mount buffer target pointers
 	 */
 	error = -ENOMEM;
-	mp->m_ddev_targp = xfs_alloc_buftarg(mp, sb_bdev_handle(sb));
+	mp->m_ddev_targp = xfs_alloc_buftarg(mp, sb->s_f_bdev);
 	if (!mp->m_ddev_targp)
 		goto out_close_rtdev;
 
-	if (rtdev_handle) {
-		mp->m_rtdev_targp = xfs_alloc_buftarg(mp, rtdev_handle);
+	if (f_rtdev) {
+		mp->m_rtdev_targp = xfs_alloc_buftarg(mp, f_rtdev);
 		if (!mp->m_rtdev_targp)
 			goto out_free_ddev_targ;
 	}
 
-	if (logdev_handle && logdev_handle->bdev != ddev) {
-		mp->m_logdev_targp = xfs_alloc_buftarg(mp, logdev_handle);
+	if (f_logdev && F_BDEV(f_logdev) != ddev) {
+		mp->m_logdev_targp = xfs_alloc_buftarg(mp, f_logdev);
 		if (!mp->m_logdev_targp)
 			goto out_free_rtdev_targ;
 	} else {
 		mp->m_logdev_targp = mp->m_ddev_targp;
 		/* Handle won't be used, drop it */
-		if (logdev_handle)
-			bdev_release(logdev_handle);
+		if (f_logdev)
+			fput(f_logdev);
 	}
 
 	return 0;
@@ -496,11 +495,11 @@ xfs_open_devices(
  out_free_ddev_targ:
 	xfs_free_buftarg(mp->m_ddev_targp);
  out_close_rtdev:
-	 if (rtdev_handle)
-		bdev_release(rtdev_handle);
+	 if (f_rtdev)
+		fput(f_rtdev);
  out_close_logdev:
-	if (logdev_handle)
-		bdev_release(logdev_handle);
+	if (f_logdev)
+		fput(f_logdev);
 	return error;
 }
 
