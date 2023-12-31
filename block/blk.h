@@ -525,7 +525,7 @@ static inline int req_ref_read(struct request *req)
 }
 
 void bdev_release(struct bdev_handle *handle);
-struct bdev_handle *bdev_open_by_dev(dev_t dev, blk_mode_t mode, void *holder,
-		const struct blk_holder_ops *hops);
-
+int bdev_open(struct block_device *bdev, blk_mode_t mode, void *holder,
+	      const struct blk_holder_ops *hops, struct file *f_bdev);
+int bdev_permission(dev_t dev, blk_mode_t mode, void *holder);
 #endif /* BLK_INTERNAL_H */
