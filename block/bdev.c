@@ -49,7 +49,6 @@ struct block_device *I_BDEV(struct inode *inode)
 }
 EXPORT_SYMBOL(I_BDEV);
 
-/* @bdev_handle will become private to block/blk.h soon. */
 struct block_device *F_BDEV(struct file *f_bdev)
 {
 	struct bdev_handle *handle = f_bdev->private_data;
