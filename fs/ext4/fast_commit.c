@@ -1605,7 +1605,7 @@ static int ext4_fc_replay_inode(struct super_block *sb,
 out:
 	iput(inode);
 	if (!ret)
-		blkdev_issue_flush(sb->s_bdev);
+		blkdev_issue_flush(F_BDEV(sb->s_f_bdev));
 
 	return 0;
 }

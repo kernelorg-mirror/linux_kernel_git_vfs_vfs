@@ -244,7 +244,7 @@ static struct buffer_head *__ext4_sb_bread_gfp(struct super_block *sb,
 struct buffer_head *ext4_sb_bread(struct super_block *sb, sector_t block,
 				   blk_opf_t op_flags)
 {
-	gfp_t gfp = mapping_gfp_constraint(sb->s_bdev->bd_inode->i_mapping,
+	gfp_t gfp = mapping_gfp_constraint(F_BDEV(sb->s_f_bdev)->bd_inode->i_mapping,
 			~__GFP_FS) | __GFP_MOVABLE;
 
 	return __ext4_sb_bread_gfp(sb, block, op_flags, gfp);
@@ -253,7 +253,7 @@ struct buffer_head *ext4_sb_bread(struct super_block *sb, sector_t block,
 struct buffer_head *ext4_sb_bread_unmovable(struct super_block *sb,
 					    sector_t block)
 {
-	gfp_t gfp = mapping_gfp_constraint(sb->s_bdev->bd_inode->i_mapping,
+	gfp_t gfp = mapping_gfp_constraint(F_BDEV(sb->s_f_bdev)->bd_inode->i_mapping,
 			~__GFP_FS);
 
 	return __ext4_sb_bread_gfp(sb, block, 0, gfp);
@@ -261,7 +261,7 @@ struct buffer_head *ext4_sb_bread_unmovable(struct super_block *sb,
 
 void ext4_sb_breadahead_unmovable(struct super_block *sb, sector_t block)
 {
-	struct buffer_head *bh = bdev_getblk(sb->s_bdev, block,
+	struct buffer_head *bh = bdev_getblk(F_BDEV(sb->s_f_bdev), block,
 			sb->s_blocksize, GFP_NOWAIT | __GFP_NOWARN);
 
 	if (likely(bh)) {
@@ -477,7 +477,7 @@ static void ext4_maybe_update_superblock(struct super_block *sb)
 		return;
 
 	lifetime_write_kbytes = sbi->s_kbytes_written +
-		((part_stat_read(sb->s_bdev, sectors[STAT_WRITE]) -
+		((part_stat_read(F_BDEV(sb->s_f_bdev), sectors[STAT_WRITE]) -
 		  sbi->s_sectors_written_start) >> 1);
 
 	/* Get the number of kilobytes not written to disk to account
@@ -502,7 +502,7 @@ static void ext4_maybe_update_superblock(struct super_block *sb)
  */
 static int block_device_ejected(struct super_block *sb)
 {
-	struct inode *bd_inode = sb->s_bdev->bd_inode;
+	struct inode *bd_inode = F_BDEV(sb->s_f_bdev)->bd_inode;
 	struct backing_dev_info *bdi = inode_to_bdi(bd_inode);
 
 	return bdi->dev == NULL;
@@ -722,7 +722,7 @@ static void ext4_handle_error(struct super_block *sb, bool force_ro, int error,
 			jbd2_journal_abort(journal, -EIO);
 	}
 
-	if (!bdev_read_only(sb->s_bdev)) {
+	if (!bdev_read_only(F_BDEV(sb->s_f_bdev))) {
 		save_error_info(sb, error, ino, block, func, line);
 		/*
 		 * In case the fs should keep running, we need to writeout
@@ -1084,7 +1084,7 @@ __acquires(bitlock)
 		if (test_opt(sb, WARN_ON_ERROR))
 			WARN_ON_ONCE(1);
 		EXT4_SB(sb)->s_mount_state |= EXT4_ERROR_FS;
-		if (!bdev_read_only(sb->s_bdev)) {
+		if (!bdev_read_only(F_BDEV(sb->s_f_bdev))) {
 			save_error_info(sb, EFSCORRUPTED, ino, block, function,
 					line);
 			schedule_work(&EXT4_SB(sb)->s_sb_upd_work);
@@ -1357,8 +1357,8 @@ static void ext4_put_super(struct super_block *sb)
 		dump_orphan_list(sb, sbi);
 	ASSERT(list_empty(&sbi->s_orphan));
 
-	sync_blockdev(sb->s_bdev);
-	invalidate_bdev(sb->s_bdev);
+	sync_blockdev(F_BDEV(sb->s_f_bdev));
+	invalidate_bdev(F_BDEV(sb->s_f_bdev));
 	if (sbi->s_journal_f_bdev) {
 		/*
 		 * Invalidate the journal device's buffers.  We don't want them
@@ -4338,7 +4338,7 @@ static struct ext4_sb_info *ext4_alloc_sbi(struct super_block *sb)
 	if (!sbi)
 		return NULL;
 
-	sbi->s_daxdev = fs_dax_get_by_bdev(sb->s_bdev, &sbi->s_dax_part_off,
+	sbi->s_daxdev = fs_dax_get_by_bdev(F_BDEV(sb->s_f_bdev), &sbi->s_dax_part_off,
 					   NULL, NULL);
 
 	sbi->s_blockgroup_lock =
@@ -5231,7 +5231,7 @@ static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb)
 
 	sbi->s_inode_readahead_blks = EXT4_DEF_INODE_READAHEAD_BLKS;
 	sbi->s_sectors_written_start =
-		part_stat_read(sb->s_bdev, sectors[STAT_WRITE]);
+		part_stat_read(F_BDEV(sb->s_f_bdev), sectors[STAT_WRITE]);
 
 	err = ext4_load_super(sb, &logical_sb_block, silent);
 	if (err)
@@ -5585,7 +5585,7 @@ static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb)
 	 * used to detect the metadata async write error.
 	 */
 	spin_lock_init(&sbi->s_bdev_wb_lock);
-	errseq_check_and_advance(&sb->s_bdev->bd_inode->i_mapping->wb_err,
+	errseq_check_and_advance(&F_BDEV(sb->s_f_bdev)->bd_inode->i_mapping->wb_err,
 				 &sbi->s_bdev_wb_err);
 	EXT4_SB(sb)->s_mount_state |= EXT4_ORPHAN_FS;
 	ext4_orphan_cleanup(sb, es);
@@ -5605,7 +5605,7 @@ static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb)
 			goto failed_mount10;
 	}
 
-	if (test_opt(sb, DISCARD) && !bdev_max_discard_sectors(sb->s_bdev))
+	if (test_opt(sb, DISCARD) && !bdev_max_discard_sectors(F_BDEV(sb->s_f_bdev)))
 		ext4_msg(sb, KERN_WARNING,
 			 "mounting with \"discard\" option, but the device does not support discard");
 
@@ -5684,7 +5684,7 @@ failed_mount:
 		fput(sbi->s_journal_f_bdev);
 	}
 out_fail:
-	invalidate_bdev(sb->s_bdev);
+	invalidate_bdev(F_BDEV(sb->s_f_bdev));
 	sb->s_fs_info = NULL;
 	return err;
 }
@@ -5943,7 +5943,7 @@ static journal_t *ext4_open_dev_journal(struct super_block *sb,
 	if (IS_ERR(f_bdev))
 		return ERR_CAST(f_bdev);
 
-	journal = jbd2_journal_init_dev(F_BDEV(f_bdev), sb->s_bdev, j_start,
+	journal = jbd2_journal_init_dev(F_BDEV(f_bdev), F_BDEV(sb->s_f_bdev), j_start,
 					j_len, sb->s_blocksize);
 	if (IS_ERR(journal)) {
 		ext4_msg(sb, KERN_ERR, "failed to create device journal");
@@ -6008,7 +6008,7 @@ static int ext4_load_journal(struct super_block *sb,
 	}
 
 	journal_dev_ro = bdev_read_only(journal->j_dev);
-	really_read_only = bdev_read_only(sb->s_bdev) | journal_dev_ro;
+	really_read_only = bdev_read_only(F_BDEV(sb->s_f_bdev)) | journal_dev_ro;
 
 	if (journal_dev_ro && !sb_rdonly(sb)) {
 		ext4_msg(sb, KERN_ERR,
@@ -6125,7 +6125,7 @@ static void ext4_update_super(struct super_block *sb)
 		ext4_update_tstamp(es, s_wtime);
 	es->s_kbytes_written =
 		cpu_to_le64(sbi->s_kbytes_written +
-		    ((part_stat_read(sb->s_bdev, sectors[STAT_WRITE]) -
+		    ((part_stat_read(F_BDEV(sb->s_f_bdev), sectors[STAT_WRITE]) -
 		      sbi->s_sectors_written_start) >> 1));
 	if (percpu_counter_initialized(&sbi->s_freeclusters_counter))
 		ext4_free_blocks_count_set(es,
@@ -6359,7 +6359,7 @@ static int ext4_sync_fs(struct super_block *sb, int wait)
 		needs_barrier = true;
 	if (needs_barrier) {
 		int err;
-		err = blkdev_issue_flush(sb->s_bdev);
+		err = blkdev_issue_flush(F_BDEV(sb->s_f_bdev));
 		if (!ret)
 			ret = err;
 	}
