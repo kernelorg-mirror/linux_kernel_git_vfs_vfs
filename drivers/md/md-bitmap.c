@@ -380,6 +380,7 @@ static int read_file_page(struct file *file, unsigned long index,
 			}
 
 			bh->b_blocknr = block;
+			bh->f_b_bdev = inode->i_sb->s_f_bdev;
 			bh->b_bdev = inode->i_sb->s_bdev;
 			if (count < blocksize)
 				count = 0;

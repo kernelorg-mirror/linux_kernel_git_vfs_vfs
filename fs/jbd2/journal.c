@@ -435,6 +435,7 @@ repeat:
 	folio_set_bh(new_bh, new_folio, new_offset);
 	new_bh->b_size = bh_in->b_size;
 	new_bh->b_bdev = journal->j_dev;
+	new_bh->f_b_bdev = journal->f_j_dev;
 	new_bh->b_blocknr = blocknr;
 	new_bh->b_private = bh_in;
 	set_buffer_mapped(new_bh);
@@ -880,7 +881,7 @@ int jbd2_fc_get_buf(journal_t *journal, struct buffer_head **bh_out)
 	if (ret)
 		return ret;
 
-	bh = __getblk(journal->j_dev, pblock, journal->j_blocksize);
+	bh = __getblk(journal->f_j_dev, pblock, journal->j_blocksize);
 	if (!bh)
 		return -ENOMEM;
 
@@ -1007,7 +1008,7 @@ jbd2_journal_get_descriptor_buffer(transaction_t *transaction, int type)
 	if (err)
 		return NULL;
 
-	bh = __getblk(journal->j_dev, blocknr, journal->j_blocksize);
+	bh = __getblk(journal->f_j_dev, blocknr, journal->j_blocksize);
 	if (!bh)
 		return NULL;
 	atomic_dec(&transaction->t_outstanding_credits);
@@ -1461,7 +1462,7 @@ static int journal_load_superblock(journal_t *journal)
 	struct buffer_head *bh;
 	journal_superblock_t *sb;
 
-	bh = getblk_unmovable(journal->j_dev, journal->j_blk_offset,
+	bh = getblk_unmovable(journal->f_j_dev, journal->j_blk_offset,
 			      journal->j_blocksize);
 	if (bh)
 		err = bh_read(bh, 0);
@@ -1516,11 +1517,12 @@ static int journal_load_superblock(journal_t *journal)
  * very few fields yet: that has to wait until we have created the
  * journal structures from from scratch, or loaded them from disk. */
 
-static journal_t *journal_init_common(struct block_device *bdev,
-			struct block_device *fs_dev,
+static journal_t *journal_init_common(struct file *f_bdev,
+			struct file *fs_dev,
 			unsigned long long start, int len, int blocksize)
 {
 	static struct lock_class_key jbd2_trans_commit_key;
+	struct block_device *bdev = F_BDEV(f_bdev);
 	journal_t *journal;
 	int err;
 	int n;
@@ -1530,8 +1532,10 @@ static journal_t *journal_init_common(struct block_device *bdev,
 		return ERR_PTR(-ENOMEM);
 
 	journal->j_blocksize = blocksize;
-	journal->j_dev = bdev;
-	journal->j_fs_dev = fs_dev;
+	journal->f_j_dev = f_bdev;
+	journal->f_j_fs_dev = fs_dev;
+	journal->j_dev = F_BDEV(f_bdev);
+	journal->j_fs_dev = F_BDEV(fs_dev);
 	journal->j_blk_offset = start;
 	journal->j_total_len = len;
 
@@ -1639,13 +1643,13 @@ err_cleanup:
  *  range of blocks on an arbitrary block device.
  *
  */
-journal_t *jbd2_journal_init_dev(struct block_device *bdev,
-			struct block_device *fs_dev,
+journal_t *jbd2_journal_init_dev(struct file *f_bdev,
+			struct file *fs_dev,
 			unsigned long long start, int len, int blocksize)
 {
 	journal_t *journal;
 
-	journal = journal_init_common(bdev, fs_dev, start, len, blocksize);
+	journal = journal_init_common(f_bdev, fs_dev, start, len, blocksize);
 	if (IS_ERR(journal))
 		return ERR_CAST(journal);
 
@@ -1682,7 +1686,7 @@ journal_t *jbd2_journal_init_inode(struct inode *inode)
 		  inode->i_sb->s_id, inode->i_ino, (long long) inode->i_size,
 		  inode->i_sb->s_blocksize_bits, inode->i_sb->s_blocksize);
 
-	journal = journal_init_common(inode->i_sb->s_bdev, inode->i_sb->s_bdev,
+	journal = journal_init_common(inode->i_sb->s_f_bdev, inode->i_sb->s_f_bdev,
 			blocknr, inode->i_size >> inode->i_sb->s_blocksize_bits,
 			inode->i_sb->s_blocksize);
 	if (IS_ERR(journal))

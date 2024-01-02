@@ -129,6 +129,7 @@ static int hpfs_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		return -EINVAL;
 
 	iomap->bdev = inode->i_sb->s_bdev;
+	iomap->f_bdev = inode->i_sb->s_f_bdev;
 	iomap->offset = offset;
 
 	hpfs_lock(sb);

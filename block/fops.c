@@ -381,6 +381,7 @@ static int blkdev_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 	loff_t isize = i_size_read(inode);
 
 	iomap->bdev = bdev;
+	BUG_ON(true /* TODO(brauner): This is the only place where we don't go from inode->i_sb->s_f_bdev for obvious reasons. Thoughts? */);
 	iomap->offset = ALIGN_DOWN(offset, bdev_logical_block_size(bdev));
 	if (iomap->offset >= isize)
 		return -EIO;

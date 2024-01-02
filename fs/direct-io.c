@@ -946,7 +946,7 @@ static int do_direct_IO(struct dio *dio, struct dio_submit *sdio,
 					map_bh->b_blocknr << sdio->blkfactor;
 				if (buffer_new(map_bh)) {
 					clean_bdev_aliases(
-						map_bh->b_bdev,
+						map_bh->f_b_bdev,
 						map_bh->b_blocknr,
 						map_bh->b_size >> i_blkbits);
 				}

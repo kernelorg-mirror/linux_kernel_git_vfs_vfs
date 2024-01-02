@@ -60,6 +60,7 @@ nilfs_btnode_create_block(struct address_space *btnc, __u64 blocknr)
 	}
 	memset(bh->b_data, 0, i_blocksize(inode));
 	bh->b_bdev = inode->i_sb->s_bdev;
+	bh->f_b_bdev = inode->i_sb->f_s_bdev;
 	bh->b_blocknr = blocknr;
 	set_buffer_mapped(bh);
 	set_buffer_uptodate(bh);
@@ -119,6 +120,7 @@ int nilfs_btnode_submit_block(struct address_space *btnc, __u64 blocknr,
 	}
 	set_buffer_mapped(bh);
 	bh->b_bdev = inode->i_sb->s_bdev;
+	bh->f_b_bdev = inode->i_sb->f_s_bdev;
 	bh->b_blocknr = pblocknr; /* set block address for read */
 	bh->b_end_io = end_buffer_read_sync;
 	get_bh(bh);

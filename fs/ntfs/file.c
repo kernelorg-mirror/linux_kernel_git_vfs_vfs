@@ -681,6 +681,7 @@ do_next_folio:
 		}
 		/* Unmapped buffer.  Need to map it. */
 		bh->b_bdev = vol->sb->s_bdev;
+		bh->f_b_bdev = vol->sb->s_f_bdev;
 		/*
 		 * If the current buffer is in the same clusters as the map
 		 * cache, there is no need to check the runlist again.  The

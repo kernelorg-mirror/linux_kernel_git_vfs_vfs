@@ -366,6 +366,7 @@ err_alloc:
 	brelse(ext_bh);
 	clear_buffer_mapped(bh_result);
 	bh_result->b_bdev = NULL;
+	bh_result->f_b_bdev = NULL;
 	// unlock cache
 	affs_unlock_ext(inode);
 	return -ENOSPC;

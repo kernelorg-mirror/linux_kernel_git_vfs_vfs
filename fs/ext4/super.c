@@ -261,7 +261,7 @@ struct buffer_head *ext4_sb_bread_unmovable(struct super_block *sb,
 
 void ext4_sb_breadahead_unmovable(struct super_block *sb, sector_t block)
 {
-	struct buffer_head *bh = bdev_getblk(F_BDEV(sb->s_f_bdev), block,
+	struct buffer_head *bh = bdev_getblk(sb->s_f_bdev, block,
 			sb->s_blocksize, GFP_NOWAIT | __GFP_NOWARN);
 
 	if (likely(bh)) {
@@ -5887,7 +5887,7 @@ static struct file *ext4_get_journal_blkdev(struct super_block *sb,
 	sb_block = EXT4_MIN_BLOCK_SIZE / blocksize;
 	offset = EXT4_MIN_BLOCK_SIZE % blocksize;
 	set_blocksize(bdev, blocksize);
-	bh = __bread(bdev, sb_block, blocksize);
+	bh = __bread(f_bdev, sb_block, blocksize);
 	if (!bh) {
 		ext4_msg(sb, KERN_ERR, "couldn't read superblock of "
 		       "external journal");
@@ -5943,7 +5943,7 @@ static journal_t *ext4_open_dev_journal(struct super_block *sb,
 	if (IS_ERR(f_bdev))
 		return ERR_CAST(f_bdev);
 
-	journal = jbd2_journal_init_dev(F_BDEV(f_bdev), F_BDEV(sb->s_f_bdev), j_start,
+	journal = jbd2_journal_init_dev(f_bdev, sb->s_f_bdev, j_start,
 					j_len, sb->s_blocksize);
 	if (IS_ERR(journal)) {
 		ext4_msg(sb, KERN_ERR, "failed to create device journal");

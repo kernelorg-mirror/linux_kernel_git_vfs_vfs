@@ -187,9 +187,9 @@ EXPORT_SYMBOL(end_buffer_write_sync);
  * succeeds, there is no need to take i_private_lock.
  */
 static struct buffer_head *
-__find_get_block_slow(struct block_device *bdev, sector_t block)
+__find_get_block_slow(struct file *f_bdev, sector_t block)
 {
-	struct inode *bd_inode = bdev->bd_inode;
+	struct inode *bd_inode = bdev_file_inode(f_bdev);
 	struct address_space *bd_mapping = bd_inode->i_mapping;
 	struct buffer_head *ret = NULL;
 	pgoff_t index;
@@ -232,7 +232,7 @@ __find_get_block_slow(struct block_device *bdev, sector_t block)
 		       "device %pg blocksize: %d\n",
 		       (unsigned long long)block,
 		       (unsigned long long)bh->b_blocknr,
-		       bh->b_state, bh->b_size, bdev,
+		       bh->b_state, bh->b_size, F_BDEV(f_bdev),
 		       1 << bd_inode->i_blkbits);
 	}
 out_unlock:
@@ -656,10 +656,10 @@ EXPORT_SYMBOL(generic_buffers_fsync);
  * `bblock + 1' is probably a dirty indirect block.  Hunt it down and, if it's
  * dirty, schedule it for IO.  So that indirects merge nicely with their data.
  */
-void write_boundary_block(struct block_device *bdev,
+void write_boundary_block(struct file *f_bdev,
 			sector_t bblock, unsigned blocksize)
 {
-	struct buffer_head *bh = __find_get_block(bdev, bblock + 1, blocksize);
+	struct buffer_head *bh = __find_get_block(f_bdev, bblock + 1, blocksize);
 	if (bh) {
 		if (buffer_dirty(bh))
 			write_dirty_buffer(bh, 0);
@@ -995,18 +995,19 @@ static sector_t blkdev_max_block(struct block_device *bdev, unsigned int size)
  * Initialise the state of a blockdev folio's buffers.
  */ 
 static sector_t folio_init_buffers(struct folio *folio,
-		struct block_device *bdev, sector_t block, int size)
+		struct file *f_bdev, sector_t block, int size)
 {
 	struct buffer_head *head = folio_buffers(folio);
 	struct buffer_head *bh = head;
 	bool uptodate = folio_test_uptodate(folio);
-	sector_t end_block = blkdev_max_block(bdev, size);
+	sector_t end_block = blkdev_max_block(F_BDEV(f_bdev), size);
 
 	do {
 		if (!buffer_mapped(bh)) {
 			bh->b_end_io = NULL;
 			bh->b_private = NULL;
-			bh->b_bdev = bdev;
+			bh->b_bdev = F_BDEV(f_bdev);
+			bh->f_b_bdev = f_bdev;
 			bh->b_blocknr = block;
 			if (uptodate)
 				set_buffer_uptodate(bh);
@@ -1029,10 +1030,10 @@ static sector_t folio_init_buffers(struct folio *folio,
  * This is used purely for blockdev mappings.
  */
 static int
-grow_dev_page(struct block_device *bdev, sector_t block,
+grow_dev_page(struct file *f_bdev, sector_t block,
 	      pgoff_t index, int size, int sizebits, gfp_t gfp)
 {
-	struct inode *inode = bdev->bd_inode;
+	struct inode *inode = bdev_file_inode(f_bdev);
 	struct folio *folio;
 	struct buffer_head *bh;
 	sector_t end_block;
@@ -1046,7 +1047,7 @@ grow_dev_page(struct block_device *bdev, sector_t block,
 	bh = folio_buffers(folio);
 	if (bh) {
 		if (bh->b_size == size) {
-			end_block = folio_init_buffers(folio, bdev,
+			end_block = folio_init_buffers(folio, f_bdev,
 					(sector_t)index << sizebits, size);
 			goto done;
 		}
@@ -1066,7 +1067,7 @@ grow_dev_page(struct block_device *bdev, sector_t block,
 	 */
 	spin_lock(&inode->i_mapping->i_private_lock);
 	link_dev_buffers(folio, bh);
-	end_block = folio_init_buffers(folio, bdev,
+	end_block = folio_init_buffers(folio, f_bdev,
 			(sector_t)index << sizebits, size);
 	spin_unlock(&inode->i_mapping->i_private_lock);
 done:
@@ -1082,7 +1083,7 @@ failed:
  * that page was dirty, the buffers are set dirty also.
  */
 static int
-grow_buffers(struct block_device *bdev, sector_t block, int size, gfp_t gfp)
+grow_buffers(struct file *f_bdev, sector_t block, int size, gfp_t gfp)
 {
 	pgoff_t index;
 	int sizebits;
@@ -1098,25 +1099,25 @@ grow_buffers(struct block_device *bdev, sector_t block, int size, gfp_t gfp)
 		printk(KERN_ERR "%s: requested out-of-range block %llu for "
 			"device %pg\n",
 			__func__, (unsigned long long)block,
-			bdev);
+			F_BDEV(f_bdev));
 		return -EIO;
 	}
 
 	/* Create a page with the proper size buffers.. */
-	return grow_dev_page(bdev, block, index, size, sizebits, gfp);
+	return grow_dev_page(f_bdev, block, index, size, sizebits, gfp);
 }
 
 static struct buffer_head *
-__getblk_slow(struct block_device *bdev, sector_t block,
+__getblk_slow(struct file *f_bdev, sector_t block,
 	     unsigned size, gfp_t gfp)
 {
 	/* Size must be multiple of hard sectorsize */
-	if (unlikely(size & (bdev_logical_block_size(bdev)-1) ||
+	if (unlikely(size & (bdev_logical_block_size(F_BDEV(f_bdev))-1) ||
 			(size < 512 || size > PAGE_SIZE))) {
 		printk(KERN_ERR "getblk(): invalid block size %d requested\n",
 					size);
 		printk(KERN_ERR "logical block size: %d\n",
-					bdev_logical_block_size(bdev));
+					bdev_logical_block_size(F_BDEV(f_bdev)));
 
 		dump_stack();
 		return NULL;
@@ -1126,11 +1127,11 @@ __getblk_slow(struct block_device *bdev, sector_t block,
 		struct buffer_head *bh;
 		int ret;
 
-		bh = __find_get_block(bdev, block, size);
+		bh = __find_get_block(f_bdev, block, size);
 		if (bh)
 			return bh;
 
-		ret = grow_buffers(bdev, block, size, gfp);
+		ret = grow_buffers(f_bdev, block, size, gfp);
 		if (ret < 0)
 			return NULL;
 	}
@@ -1392,13 +1393,13 @@ lookup_bh_lru(struct block_device *bdev, sector_t block, unsigned size)
  * NULL
  */
 struct buffer_head *
-__find_get_block(struct block_device *bdev, sector_t block, unsigned size)
+__find_get_block(struct file *f_bdev, sector_t block, unsigned size)
 {
-	struct buffer_head *bh = lookup_bh_lru(bdev, block, size);
+	struct buffer_head *bh = lookup_bh_lru(F_BDEV(f_bdev), block, size);
 
 	if (bh == NULL) {
 		/* __find_get_block_slow will mark the page accessed */
-		bh = __find_get_block_slow(bdev, block);
+		bh = __find_get_block_slow(f_bdev, block);
 		if (bh)
 			bh_lru_install(bh);
 	} else
@@ -1417,25 +1418,25 @@ EXPORT_SYMBOL(__find_get_block);
  *
  * Return: The buffer head, or NULL if memory could not be allocated.
  */
-struct buffer_head *bdev_getblk(struct block_device *bdev, sector_t block,
+struct buffer_head *bdev_getblk(struct file *f_bdev, sector_t block,
 		unsigned size, gfp_t gfp)
 {
-	struct buffer_head *bh = __find_get_block(bdev, block, size);
+	struct buffer_head *bh = __find_get_block(f_bdev, block, size);
 
 	might_alloc(gfp);
 	if (bh)
 		return bh;
 
-	return __getblk_slow(bdev, block, size, gfp);
+	return __getblk_slow(f_bdev, block, size, gfp);
 }
 EXPORT_SYMBOL(bdev_getblk);
 
 /*
  * Do async read-ahead on a buffer..
  */
-void __breadahead(struct block_device *bdev, sector_t block, unsigned size)
+void __breadahead(struct file *f_bdev, sector_t block, unsigned size)
 {
-	struct buffer_head *bh = bdev_getblk(bdev, block, size,
+	struct buffer_head *bh = bdev_getblk(f_bdev, block, size,
 			GFP_NOWAIT | __GFP_MOVABLE);
 
 	if (likely(bh)) {
@@ -1458,12 +1459,12 @@ EXPORT_SYMBOL(__breadahead);
  *  It returns NULL if the block was unreadable.
  */
 struct buffer_head *
-__bread_gfp(struct block_device *bdev, sector_t block,
+__bread_gfp(struct file *f_bdev, sector_t block,
 		   unsigned size, gfp_t gfp)
 {
 	struct buffer_head *bh;
 
-	gfp |= mapping_gfp_constraint(bdev->bd_inode->i_mapping, ~__GFP_FS);
+	gfp |= mapping_gfp_constraint(bdev_file_inode(f_bdev)->i_mapping, ~__GFP_FS);
 
 	/*
 	 * Prefer looping in the allocator rather than here, at least that
@@ -1471,7 +1472,7 @@ __bread_gfp(struct block_device *bdev, sector_t block,
 	 */
 	gfp |= __GFP_NOFAIL;
 
-	bh = bdev_getblk(bdev, block, size, gfp);
+	bh = bdev_getblk(f_bdev, block, size, gfp);
 
 	if (likely(bh) && !buffer_uptodate(bh))
 		bh = __bread_slow(bh);
@@ -1565,6 +1566,7 @@ static void discard_buffer(struct buffer_head * bh)
 	lock_buffer(bh);
 	clear_buffer_dirty(bh);
 	bh->b_bdev = NULL;
+	bh->f_b_bdev = NULL;
 	b_state = READ_ONCE(bh->b_state);
 	do {
 	} while (!try_cmpxchg(&bh->b_state, &b_state,
@@ -1694,9 +1696,9 @@ EXPORT_SYMBOL(create_empty_buffers);
  * I/O in bforget() - it's more efficient to wait on the I/O only if we really
  * need to.  That happens here.
  */
-void clean_bdev_aliases(struct block_device *bdev, sector_t block, sector_t len)
+void clean_bdev_aliases(struct file *f_bdev, sector_t block, sector_t len)
 {
-	struct inode *bd_inode = bdev->bd_inode;
+	struct inode *bd_inode = bdev_file_inode(f_bdev);
 	struct address_space *bd_mapping = bd_inode->i_mapping;
 	struct folio_batch fbatch;
 	pgoff_t index = block >> (PAGE_SHIFT - bd_inode->i_blkbits);
@@ -2017,6 +2019,7 @@ iomap_to_bh(struct inode *inode, sector_t block, struct buffer_head *bh,
 	loff_t offset = block << inode->i_blkbits;
 
 	bh->b_bdev = iomap->bdev;
+	bh->f_b_bdev = iomap->f_bdev;
 
 	/*
 	 * Block points to offset in file we need to map, iomap contains

@@ -927,6 +927,7 @@ unstuff:
 
 out:
 	iomap->bdev = inode->i_sb->s_bdev;
+	iomap->f_bdev = inode->i_sb->s_f_bdev;
 unlock:
 	up_read(&ip->i_rw_mutex);
 	return ret;

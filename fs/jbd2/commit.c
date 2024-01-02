@@ -1015,6 +1015,7 @@ restart_loop:
 				clear_buffer_new(bh);
 				clear_buffer_req(bh);
 				bh->b_bdev = NULL;
+				bh->f_b_bdev = NULL;
 			}
 		}
 

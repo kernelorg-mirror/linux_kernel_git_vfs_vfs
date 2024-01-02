@@ -2810,10 +2810,10 @@ struct reiserfs_journal_header {
 
 /* We need these to make journal.c code more readable */
 #define journal_find_get_block(s, block) __find_get_block(\
-		F_BDEV(SB_JOURNAL(s)->j_f_bdev), block, s->s_blocksize)
-#define journal_getblk(s, block) __getblk(F_BDEV(SB_JOURNAL(s)->j_f_bdev),\
+		SB_JOURNAL(s)->j_f_bdev, block, s->s_blocksize)
+#define journal_getblk(s, block) __getblk(SB_JOURNAL(s)->j_f_bdev,\
 		block, s->s_blocksize)
-#define journal_bread(s, block) __bread(F_BDEV(SB_JOURNAL(s)->j_f_bdev),\
+#define journal_bread(s, block) __bread(SB_JOURNAL(s)->j_f_bdev,\
 		block, s->s_blocksize)
 
 enum reiserfs_bh_state_bits {

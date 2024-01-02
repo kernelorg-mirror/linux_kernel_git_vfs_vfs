@@ -39,6 +39,7 @@ static int zonefs_read_iomap_begin(struct inode *inode, loff_t offset,
 	 */
 	mutex_lock(&zi->i_truncate_mutex);
 	iomap->bdev = inode->i_sb->s_bdev;
+	iomap->f_bdev = inode->i_sb->s_f_bdev;
 	iomap->offset = ALIGN_DOWN(offset, sb->s_blocksize);
 	isize = i_size_read(inode);
 	if (iomap->offset >= isize) {
@@ -89,6 +90,7 @@ static int zonefs_write_iomap_begin(struct inode *inode, loff_t offset,
 	 */
 	mutex_lock(&zi->i_truncate_mutex);
 	iomap->bdev = inode->i_sb->s_bdev;
+	iomap->f_bdev = inode->i_sb->s_f_bdev;
 	iomap->offset = ALIGN_DOWN(offset, sb->s_blocksize);
 	iomap->addr = (z->z_sector << SECTOR_SHIFT) + iomap->offset;
 	isize = i_size_read(inode);

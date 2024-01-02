@@ -90,6 +90,7 @@ static int nilfs_mdt_create_block(struct inode *inode, unsigned long block,
 		goto failed_bh;
 
 	bh->b_bdev = sb->s_bdev;
+	bh->f_b_bdev = sb->f_s_bdev;
 	err = nilfs_mdt_insert_new_block(inode, block, bh, init_block);
 	if (likely(!err)) {
 		get_bh(bh);

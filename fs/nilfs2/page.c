@@ -112,6 +112,7 @@ void nilfs_copy_buffer(struct buffer_head *dbh, struct buffer_head *sbh)
 	dbh->b_state = sbh->b_state & NILFS_BUFFER_INHERENT_BITS;
 	dbh->b_blocknr = sbh->b_blocknr;
 	dbh->b_bdev = sbh->b_bdev;
+	dbh->f_b_bdev = sbh->f_b_bdev;
 
 	bh = dbh;
 	bits = sbh->b_state & (BIT(BH_Uptodate) | BIT(BH_Mapped));
@@ -216,6 +217,7 @@ static void nilfs_copy_folio(struct folio *dst, struct folio *src,
 		dbh->b_state = sbh->b_state & mask;
 		dbh->b_blocknr = sbh->b_blocknr;
 		dbh->b_bdev = sbh->b_bdev;
+		dbh->f_b_bdev = sbh->f_b_bdev;
 		sbh = sbh->b_this_page;
 		dbh = dbh->b_this_page;
 	} while (dbh != dbufs);

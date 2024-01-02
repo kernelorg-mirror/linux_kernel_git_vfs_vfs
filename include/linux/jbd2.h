@@ -972,6 +972,7 @@ struct journal_s
 	 * @j_dev: Device where we store the journal.
 	 */
 	struct block_device	*j_dev;
+	struct file		*f_j_dev;
 
 	/**
 	 * @j_blocksize: Block size for the location where we store the journal.
@@ -997,6 +998,7 @@ struct journal_s
 	 * equal to j_dev.
 	 */
 	struct block_device	*j_fs_dev;
+	struct file		*f_j_fs_dev;
 
 	/**
 	 * @j_total_len: Total maximum capacity of the journal region on disk.
@@ -1537,8 +1539,8 @@ extern void	 jbd2_journal_unlock_updates (journal_t *);
 
 void jbd2_journal_wait_updates(journal_t *);
 
-extern journal_t * jbd2_journal_init_dev(struct block_device *bdev,
-				struct block_device *fs_dev,
+extern journal_t * jbd2_journal_init_dev(struct file *f_bdev,
+				struct file *fs_dev,
 				unsigned long long start, int len, int bsize);
 extern journal_t * jbd2_journal_init_inode (struct inode *);
 extern int	   jbd2_journal_update_format (journal_t *);

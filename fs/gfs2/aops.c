@@ -626,6 +626,7 @@ static void gfs2_discard(struct gfs2_sbd *sdp, struct buffer_head *bh)
 		}
 	}
 	bh->b_bdev = NULL;
+	bh->f_b_bdev = NULL;
 	clear_buffer_mapped(bh);
 	clear_buffer_req(bh);
 	clear_buffer_new(bh);

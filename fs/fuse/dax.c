@@ -576,6 +576,7 @@ static int fuse_iomap_begin(struct inode *inode, loff_t pos, loff_t length,
 	iomap->offset = pos;
 	iomap->flags = 0;
 	iomap->bdev = NULL;
+	iomap->f_bdev = NULL;
 	iomap->dax_dev = fc->dax->dev;
 
 	/*

@@ -741,6 +741,7 @@ static int z_erofs_iomap_begin_report(struct inode *inode, loff_t offset,
 		return ret;
 
 	iomap->bdev = inode->i_sb->s_bdev;
+	iomap->f_bdev = inode->i_sb->s_f_bdev;
 	iomap->offset = map.m_la;
 	iomap->length = map.m_llen;
 	if (map.m_flags & EROFS_MAP_MAPPED) {

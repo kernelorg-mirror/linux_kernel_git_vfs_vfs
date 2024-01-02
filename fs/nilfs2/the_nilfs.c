@@ -63,6 +63,7 @@ struct the_nilfs *alloc_nilfs(struct super_block *sb)
 
 	nilfs->ns_sb = sb;
 	nilfs->ns_bdev = sb->s_bdev;
+	nilfs->ns_f_bdev = sb->s_f_bdev;
 	atomic_set(&nilfs->ns_ndirtyblks, 0);
 	init_rwsem(&nilfs->ns_sem);
 	mutex_init(&nilfs->ns_snapshot_mount_mutex);

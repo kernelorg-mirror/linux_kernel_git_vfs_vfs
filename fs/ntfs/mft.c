@@ -527,6 +527,7 @@ int ntfs_sync_mft_mirror(ntfs_volume *vol, const unsigned long mft_no,
 			unsigned int vcn_ofs;
 
 			bh->b_bdev = vol->sb->s_bdev;
+			bh->f_b_bdev = vol->sb->s_f_bdev;
 			/* Obtain the vcn and offset of the current block. */
 			vcn = ((VCN)mft_no << vol->mft_record_size_bits) +
 					(block_start - m_start);
@@ -720,6 +721,7 @@ int write_mft_record_nolock(ntfs_inode *ni, MFT_RECORD *m, int sync)
 			unsigned int vcn_ofs;
 
 			bh->b_bdev = vol->sb->s_bdev;
+			bh->f_b_bdev = vol->sb->s_f_bdev;
 			/* Obtain the vcn and offset of the current block. */
 			vcn = ((VCN)ni->mft_no << vol->mft_record_size_bits) +
 					(block_start - m_start);

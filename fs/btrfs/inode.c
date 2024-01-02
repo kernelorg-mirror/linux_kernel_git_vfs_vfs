@@ -7647,6 +7647,7 @@ static int btrfs_dio_iomap_begin(struct inode *inode, loff_t start,
 	}
 	iomap->offset = start;
 	iomap->bdev = fs_info->fs_devices->latest_dev->bdev;
+	iomap->f_bdev = fs_info->fs_devices->latest_dev->f_bdev;
 	iomap->length = len;
 	free_extent_map(em);
 
