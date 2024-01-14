@@ -862,6 +862,9 @@ const struct file_operations def_blk_fops = {
 	.fallocate	= blkdev_fallocate,
 };
 
+/* Indicator that this block device is opened with restricted write access. */
+const struct file_operations def_blk_fops_restricted = def_blk_fops;
+
 static __init int blkdev_init(void)
 {
 	return bioset_init(&blkdev_dio_pool, 4,
