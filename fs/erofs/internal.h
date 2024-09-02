@@ -18,6 +18,8 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/iomap.h>
+#include <linux/interval_tree.h>
+#include <linux/mutex.h>
 #include "erofs_fs.h"
 
 __printf(2, 3) void _erofs_printk(struct super_block *sb, const char *fmt, ...);
@@ -275,6 +277,9 @@ struct erofs_inode {
 	};
 #ifdef CONFIG_EROFS_FS_PAGE_CACHE_SHARE
 	struct inode *ano_inode;
+	/* segments attributed by this inode */
+	struct rb_root_cached segs;
+	struct mutex segs_mutex;
 #endif
 	/* the corresponding vfs inode */
 	struct inode vfs_inode;
