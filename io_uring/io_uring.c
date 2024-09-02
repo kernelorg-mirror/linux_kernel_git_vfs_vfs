@@ -3722,12 +3722,15 @@ static int __init io_uring_init(void)
 	 * range, and HARDENED_USERCOPY will complain if we haven't
 	 * correctly annotated this range.
 	 */
-	req_cachep = kmem_cache_create_usercopy("io_kiocb",
-				sizeof(struct io_kiocb), 0,
-				SLAB_HWCACHE_ALIGN | SLAB_PANIC |
-				SLAB_ACCOUNT | SLAB_TYPESAFE_BY_RCU,
-				offsetof(struct io_kiocb, cmd.data),
-				sizeof_field(struct io_kiocb, cmd.data), NULL);
+	req_cachep = kmem_cache_setup("io_kiocb", sizeof(struct io_kiocb),
+		&(struct kmem_cache_args) {
+			.useroffset = offsetof(struct io_kiocb, cmd.data),
+			.usersize = sizeof_field(struct io_kiocb, cmd.data),
+		},
+		SLAB_HWCACHE_ALIGN |
+		SLAB_PANIC |
+		SLAB_ACCOUNT |
+		SLAB_TYPESAFE_BY_RCU);
 	io_buf_cachep = KMEM_CACHE(io_buffer,
 					  SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT);
 
