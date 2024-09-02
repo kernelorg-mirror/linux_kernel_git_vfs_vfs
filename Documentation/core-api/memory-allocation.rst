@@ -166,11 +166,11 @@ documentation. Note that `kvmalloc` may return memory that is not
 physically contiguous.
 
 If you need to allocate many identical objects you can use the slab
-cache allocator. The cache should be set up with kmem_cache_create() or
-kmem_cache_create_usercopy() before it can be used. The second function
-should be used if a part of the cache might be copied to the userspace.
-After the cache is created kmem_cache_alloc() and its convenience
-wrappers can allocate memory from that cache.
+cache allocator. The cache should be set up with kmem_cache_setup()
+before it can be used. The second function should be used if a part of
+the cache might be copied to the userspace. After the cache is created
+kmem_cache_alloc() and its convenience wrappers can allocate memory from
+that cache.
 
 When the allocated memory is no longer needed it must be freed.
 
