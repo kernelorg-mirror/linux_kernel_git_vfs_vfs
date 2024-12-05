@@ -68,6 +68,7 @@ struct pid
 	struct upid numbers[];
 };
 
+extern struct maple_tree pidfs_ino_mtree;
 extern struct pid init_struct_pid;
 
 struct file;

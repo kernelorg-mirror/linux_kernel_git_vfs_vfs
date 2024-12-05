@@ -104,6 +104,11 @@ EXPORT_SYMBOL_GPL(init_pid_ns);
 
 static  __cacheline_aligned_in_smp DEFINE_SPINLOCK(pidmap_lock);
 
+struct maple_tree pidfs_ino_mtree = MTREE_INIT_EXT(pidfs_ino_mtree,
+						   MT_FLAGS_ALLOC_RANGE |
+						   MT_FLAGS_LOCK_EXTERN,
+						   pidmap_lock);
+
 void put_pid(struct pid *pid)
 {
 	struct pid_namespace *ns;
@@ -269,7 +274,6 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 	INIT_HLIST_HEAD(&pid->inodes);
 
 	upid = pid->numbers + ns->level;
-	idr_preload(GFP_KERNEL);
 	spin_lock_irq(&pidmap_lock);
 	if (!(ns->pid_allocated & PIDNS_ADDING))
 		goto out_unlock;
@@ -282,13 +286,11 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 		upid->ns->pid_allocated++;
 	}
 	spin_unlock_irq(&pidmap_lock);
-	idr_preload_end();
 
 	return pid;
 
 out_unlock:
 	spin_unlock_irq(&pidmap_lock);
-	idr_preload_end();
 	put_pid_ns(ns);
 
 out_free:
