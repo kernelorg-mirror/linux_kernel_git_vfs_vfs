@@ -82,6 +82,7 @@ static DEFINE_RWLOCK(mnt_ns_tree_lock);
 static seqcount_rwlock_t mnt_ns_tree_seqcount = SEQCNT_RWLOCK_ZERO(mnt_ns_tree_seqcount, &mnt_ns_tree_lock);
 
 static struct rb_root mnt_ns_tree = RB_ROOT; /* protected by mnt_ns_tree_lock */
+static LIST_HEAD(mnt_ns_list); /* protected by mnt_ns_tree_lock */
 
 struct mount_kattr {
 	unsigned int attr_set;
@@ -146,6 +147,7 @@ static void mnt_ns_tree_add(struct mnt_namespace *ns)
 
 	mnt_ns_tree_write_lock();
 	node = rb_find_add_rcu(&ns->mnt_ns_tree_node, &mnt_ns_tree, mnt_ns_cmp);
+	list_add_tail_rcu(&ns->mnt_ns_list, &mnt_ns_list);
 	mnt_ns_tree_write_unlock();
 
 	WARN_ON_ONCE(node);
@@ -177,6 +179,7 @@ static void mnt_ns_tree_remove(struct mnt_namespace *ns)
 	if (!is_anon_ns(ns)) {
 		mnt_ns_tree_write_lock();
 		rb_erase(&ns->mnt_ns_tree_node, &mnt_ns_tree);
+		list_bidir_del_rcu(&ns->mnt_ns_list);
 		mnt_ns_tree_write_unlock();
 	}
 
@@ -2091,30 +2094,34 @@ struct ns_common *from_mnt_ns(struct mnt_namespace *mnt)
 	return &mnt->ns;
 }
 
-struct mnt_namespace *__lookup_next_mnt_ns(struct mnt_namespace *mntns, bool previous)
+struct mnt_namespace *get_sequential_mnt_ns(struct mnt_namespace *mntns, bool previous)
 {
-	guard(read_lock)(&mnt_ns_tree_lock);
-	for (;;) {
-		struct rb_node *node;
+	struct list_head *list;
 
+	guard(rcu)();
+
+	for (;;) {
 		if (previous)
-			node = rb_prev(&mntns->mnt_ns_tree_node);
+			list = rcu_dereference(list_bidir_prev_rcu(&mntns->mnt_ns_list));
 		else
-			node = rb_next(&mntns->mnt_ns_tree_node);
-		if (!node)
+			list = rcu_dereference(list_next_rcu(&mntns->mnt_ns_list));
+		if (list_is_head(list, &mnt_ns_list))
 			return ERR_PTR(-ENOENT);
 
-		mntns = node_to_mnt_ns(node);
-		node = &mntns->mnt_ns_tree_node;
+		mntns = list_entry_rcu(list, struct mnt_namespace, mnt_ns_list);
 
+		/*
+		 * The last passive reference count is put with RCU
+		 * delay so accessing the mount namespace is not just
+		 * safe it's members are all still valid.
+		 */
 		if (!ns_capable_noaudit(mntns->user_ns, CAP_SYS_ADMIN))
 			continue;
 
 		/*
-		 * Holding mnt_ns_tree_lock prevents the mount namespace from
-		 * being freed but it may well be on it's deathbed. We want an
-		 * active reference, not just a passive one here as we're
-		 * persisting the mount namespace.
+		 * We need an active reference count as we're persisting
+		 * the mount namespace and it might already be on its
+		 * deathbed.
 		 */
 		if (!refcount_inc_not_zero(&mntns->ns.count))
 			continue;
@@ -3931,6 +3938,7 @@ static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *user_ns, bool a
 	refcount_set(&new_ns->ns.count, 1);
 	refcount_set(&new_ns->passive, 1);
 	new_ns->mounts = RB_ROOT;
+	INIT_LIST_HEAD(&new_ns->mnt_ns_list);
 	RB_CLEAR_NODE(&new_ns->mnt_ns_tree_node);
 	init_waitqueue_head(&new_ns->poll);
 	new_ns->user_ns = get_user_ns(user_ns);
