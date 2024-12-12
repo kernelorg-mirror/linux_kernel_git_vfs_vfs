@@ -78,8 +78,8 @@ static struct kmem_cache *mnt_cache __ro_after_init;
 static DECLARE_RWSEM(namespace_sem);
 static HLIST_HEAD(unmounted);	/* protected by namespace_sem */
 static LIST_HEAD(ex_mountpoints); /* protected by namespace_sem */
-static DEFINE_RWLOCK(mnt_ns_tree_lock);
-static seqcount_rwlock_t mnt_ns_tree_seqcount = SEQCNT_RWLOCK_ZERO(mnt_ns_tree_seqcount, &mnt_ns_tree_lock);
+static DEFINE_SPINLOCK(mnt_ns_tree_lock);
+static seqcount_spinlock_t mnt_ns_tree_seqcount = SEQCNT_SPINLOCK_ZERO(mnt_ns_tree_seqcount, &mnt_ns_tree_lock);
 
 static struct rb_root mnt_ns_tree = RB_ROOT; /* protected by mnt_ns_tree_lock */
 static LIST_HEAD(mnt_ns_list); /* protected by mnt_ns_tree_lock */
@@ -131,14 +131,14 @@ static int mnt_ns_cmp(struct rb_node *a, const struct rb_node *b)
 
 static inline void mnt_ns_tree_write_lock(void)
 {
-	write_lock(&mnt_ns_tree_lock);
+	spin_lock(&mnt_ns_tree_lock);
 	write_seqcount_begin(&mnt_ns_tree_seqcount);
 }
 
 static inline void mnt_ns_tree_write_unlock(void)
 {
 	write_seqcount_end(&mnt_ns_tree_seqcount);
-	write_unlock(&mnt_ns_tree_lock);
+	spin_unlock(&mnt_ns_tree_lock);
 }
 
 static void mnt_ns_tree_add(struct mnt_namespace *ns)
