@@ -218,12 +218,32 @@ static __poll_t pidfd_poll(struct file *file, struct poll_table_struct *pts)
 	/*
 	 * Depending on PIDFD_THREAD, inform pollers when the thread
 	 * or the whole thread-group exits.
+	 *
+	 * There are two corner cases to consider:
+	 *
+	 * (1) If a thread-group leader of a thread-group with
+	 *     subthreads exits prematurely, i.e., before all of the
+	 *     subthreads of the thread-group have exited then no
+	 *     notification will be generated for PIDFD_THREAD pidfds
+	 *     referring to the thread-group leader.
+	 *
+	 *     The exit notification for the thread-group leader will be
+	 *     delayed until the last subthread of the thread-group
+	 *     exits.
+	 *
+	 * (2) If a subthread of a thread-group execs then the
+	 *     current thread-group leader will be SIGKILLed and the
+	 *     subthread will assume the struct pid of the now defunct
+	 *     old thread-group leader. No exit notification will be
+	 *     generated for PIDFD_THREAD pidfds referring to the old
+	 *     thread-group leader as they continue referring to the new
+	 *     thread-group leader.
 	 */
 	guard(rcu)();
 	task = pid_task(pid, PIDTYPE_PID);
 	if (!task)
 		poll_flags = EPOLLIN | EPOLLRDNORM | EPOLLHUP;
-	else if (task->exit_state && (thread || thread_group_empty(task)))
+	else if (task->exit_state && !delay_group_leader(task))
 		poll_flags = EPOLLIN | EPOLLRDNORM;
 
 	return poll_flags;

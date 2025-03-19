@@ -271,6 +271,9 @@ repeat:
 		 * If we were the last child thread and the leader has
 		 * exited already, and the leader's parent ignores SIGCHLD,
 		 * then we are the one who should release the leader.
+		 *
+		 * This will also wake PIDFD_THREAD pidfds for the
+		 * thread-group leader that already exited.
 		 */
 		zap_leader = do_notify_parent(leader, leader->exit_signal);
 		if (zap_leader)
@@ -743,10 +746,13 @@ static void exit_notify(struct task_struct *tsk, int group_dead)
 
 	tsk->exit_state = EXIT_ZOMBIE;
 	/*
-	 * sub-thread or delay_group_leader(), wake up the
-	 * PIDFD_THREAD waiters.
+	 * Wake up PIDFD_THREAD waiters if this is a proper subthread
+	 * exit. If this is a premature thread-group leader exit delay
+	 * the notification until the last subthread exits. If a
+	 * subthread should exec before then no notification will be
+	 * generated.
 	 */
-	if (!thread_group_empty(tsk))
+	if (!delay_group_leader(tsk))
 		do_notify_pidfd(tsk);
 
 	if (unlikely(tsk->ptrace)) {
