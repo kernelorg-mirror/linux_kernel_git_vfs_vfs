@@ -2108,10 +2108,35 @@ static int __pidfd_prepare(struct pid *pid, unsigned int flags, struct file **re
  */
 int pidfd_prepare(struct pid *pid, unsigned int flags, struct file **ret)
 {
-	bool thread = flags & PIDFD_THREAD;
+	int err = 0;
 
-	if (!pid_has_task(pid, thread ? PIDTYPE_PID : PIDTYPE_TGID))
-		return -EINVAL;
+	if (!(flags & PIDFD_THREAD)) {
+		/*
+		 * If this is struct pid isn't used as a thread-group
+		 * leader pid but the caller requested to create a
+		 * thread-group leader pidfd then report ENOENT to the
+		 * caller as a hint.
+		 */
+		if (!pid_has_task(pid, PIDTYPE_TGID))
+			err = -ENOENT;
+	}
+
+	/*
+	 * If this wasn't a thread-group leader struct pid or the task
+	 * got reaped in the meantime report -ESRCH to userspace.
+	 *
+	 * This is racy of course. This could've not been a thread-group
+	 * leader struct pid and we set ENOENT above but in the meantime
+	 * the task got reaped. Or there was a multi-threaded-exec by a
+	 * subthread and we were a thread-group leader but now got
+	 * killed. All of that doesn't matter since the task has already
+	 * been reaped that distinction is meaningless to userspace so
+	 * just report ESRCH.
+	 */
+	if (!pid_has_task(pid, PIDTYPE_PID))
+		err = -ESRCH;
+	if (err)
+		return err;
 
 	return __pidfd_prepare(pid, flags, ret);
 }
