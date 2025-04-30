@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include <fcntl.h>
+#include <inttypes.h>
 #include <libgen.h>
 #include <linux/limits.h>
 #include <pthread.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include "../kselftest_harness.h"
+#include "../pidfd/pidfd.h"
 
 #define STACKDUMP_FILE "stack_values"
 #define STACKDUMP_SCRIPT "stackdump"
@@ -35,6 +41,7 @@ static void crashing_child(void)
 FIXTURE(coredump)
 {
 	char original_core_pattern[256];
+	pid_t pid_coredump_server;
 };
 
 FIXTURE_SETUP(coredump)
@@ -44,6 +51,7 @@ FIXTURE_SETUP(coredump)
 	char *dir;
 	int ret;
 
+	self->pid_coredump_server = -ESRCH;
 	file = fopen("/proc/sys/kernel/core_pattern", "r");
 	ASSERT_NE(NULL, file);
 
@@ -61,9 +69,14 @@ FIXTURE_TEARDOWN(coredump)
 {
 	const char *reason;
 	FILE *file;
-	int ret;
+	int ret, status;
 
 	unlink(STACKDUMP_FILE);
+
+	if (self->pid_coredump_server > 0) {
+		kill(self->pid_coredump_server, SIGTERM);
+		waitpid(self->pid_coredump_server, &status, 0);
+	}
 
 	file = fopen("/proc/sys/kernel/core_pattern", "w");
 	if (!file) {
@@ -152,6 +165,947 @@ TEST_F_TIMEOUT(coredump, stackdump, 120)
 	ASSERT_EQ(i, 1 + NUM_THREAD_SPAWN);
 
 	fclose(file);
+}
+
+TEST_F(coredump, socket)
+{
+	int fd, pidfd, ret, status;
+	FILE *file;
+	pid_t pid, pid_coredump_server;
+	struct stat st;
+	char core_file[PATH_MAX];
+	struct pidfd_info info = {};
+	int ipc_sockets[2];
+	char c;
+
+	ASSERT_EQ(unshare(CLONE_NEWNS), 0);
+	ASSERT_EQ(mount(NULL, "/", NULL, MS_PRIVATE | MS_REC, NULL), 0);
+	ASSERT_EQ(mount(NULL, "/tmp", "tmpfs", 0, NULL), 0);
+
+	ret = socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, ipc_sockets);
+	ASSERT_EQ(ret, 0);
+
+	pid_coredump_server = fork();
+	ASSERT_GE(pid_coredump_server, 0);
+	if (pid_coredump_server == 0) {
+		int fd_server, fd_coredump, fd_peer_pidfd, fd_core_file;
+		__u64 peer_cookie, server_cookie;
+		socklen_t fd_peer_pidfd_len, peer_cookie_len, server_cookie_len;
+		struct sockaddr_un coredump_sk = {
+			.sun_family = AF_UNIX,
+		};
+		size_t coredump_sk_len;
+
+		close(ipc_sockets[0]);
+
+		fd_server = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+		if (fd_server < 0)
+			_exit(EXIT_FAILURE);
+
+		server_cookie_len = sizeof(server_cookie);
+		ret = getsockopt(fd_server, SOL_SOCKET, SO_COOKIE,
+				 &server_cookie, &server_cookie_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve cookie for coredump socket server\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		coredump_sk_len = snprintf(coredump_sk.sun_path,
+					   sizeof(coredump_sk.sun_path),
+					   "@coredump.socket %" PRIu64, server_cookie);
+		if (coredump_sk_len < 0 || coredump_sk_len >= sizeof(coredump_sk.sun_path)) {
+			fprintf(stderr, "Unable to create coredump socket path\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		file = fopen("/proc/sys/kernel/core_pattern", "w");
+		if (!file) {
+			fprintf(stderr, "Unable to open core_pattern\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = fprintf(file, "%s", coredump_sk.sun_path);
+		fclose(file);
+		if (ret < 0) {
+			fprintf(stderr, "Unable to write to core_pattern\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		coredump_sk.sun_path[0] = '\0';
+		memcpy(coredump_sk.sun_path, "\0coredump.socket", sizeof("coredump.socket"));
+		coredump_sk_len = offsetof(struct sockaddr_un, sun_path) + sizeof("coredump.socket");
+		ret = bind(fd_server, (const struct sockaddr *)&coredump_sk, coredump_sk_len);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to bind coredump socket\n");
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = listen(fd_server, 1);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to listen on coredump socket\n");
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (write_nointr(ipc_sockets[1], "1", 1) < 0) {
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		close(ipc_sockets[1]);
+
+		fd_coredump = accept4(fd_server, NULL, NULL, SOCK_CLOEXEC);
+		if (fd_coredump < 0) {
+			fprintf(stderr, "Failed to accept coredump socket connection\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		peer_cookie_len = sizeof(peer_cookie);
+		ret = getsockopt(fd_coredump, SOL_SOCKET, SO_COOKIE,
+				 &peer_cookie, &peer_cookie_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve cookie for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		fd_peer_pidfd_len = sizeof(fd_peer_pidfd);
+		ret = getsockopt(fd_coredump, SOL_SOCKET, SO_PEERPIDFD,
+				 &fd_peer_pidfd, &fd_peer_pidfd_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve peer pidfd for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		memset(&info, 0, sizeof(info));
+		info.mask = PIDFD_INFO_EXIT | PIDFD_INFO_COREDUMP;
+		ret = ioctl(fd_peer_pidfd, PIDFD_GET_INFO, &info);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to retrieve pidfd info from peer pidfd for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!(info.mask & PIDFD_INFO_COREDUMP)) {
+			fprintf(stderr, "Missing coredump information from coredumping task\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!(info.coredump_mask & PIDFD_COREDUMPED)) {
+			fprintf(stderr, "Received connection from non-coredumping task\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!info.coredump_cookie) {
+			fprintf(stderr, "Missing coredump cookie\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (info.coredump_cookie != peer_cookie) {
+			fprintf(stderr, "Mismatching coredump cookies\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		fd_core_file = creat("/tmp/coredump.file", 0644);
+		if (fd_core_file < 0) {
+			fprintf(stderr, "Failed to create coredump file\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		for (;;) {
+			char buffer[4096];
+			ssize_t bytes_read, bytes_write;
+
+			bytes_read = read(fd_coredump, buffer, sizeof(buffer));
+			if (bytes_read < 0) {
+				close(fd_coredump);
+				close(fd_server);
+				close(fd_peer_pidfd);
+				close(fd_core_file);
+				_exit(EXIT_FAILURE);
+			}
+
+			if (bytes_read == 0)
+				break;
+
+			bytes_write = write(fd_core_file, buffer, bytes_read);
+			if (bytes_read != bytes_write) {
+				close(fd_coredump);
+				close(fd_server);
+				close(fd_peer_pidfd);
+				close(fd_core_file);
+				_exit(EXIT_FAILURE);
+			}
+		}
+
+		close(fd_coredump);
+		close(fd_server);
+		close(fd_peer_pidfd);
+		close(fd_core_file);
+		_exit(EXIT_SUCCESS);
+	}
+	self->pid_coredump_server = pid_coredump_server;
+
+	EXPECT_EQ(close(ipc_sockets[1]), 0);
+	ASSERT_EQ(read_nointr(ipc_sockets[0], &c, 1), 1);
+	EXPECT_EQ(close(ipc_sockets[0]), 0);
+
+	pid = fork();
+	ASSERT_GE(pid, 0);
+	if (pid == 0)
+		crashing_child();
+
+	pidfd = sys_pidfd_open(pid, 0);
+	ASSERT_GE(pidfd, 0);
+
+	waitpid(pid, &status, 0);
+	ASSERT_TRUE(WIFSIGNALED(status));
+	ASSERT_TRUE(WCOREDUMP(status));
+
+	info.mask = PIDFD_INFO_EXIT | PIDFD_INFO_COREDUMP;
+	ASSERT_EQ(ioctl(pidfd, PIDFD_GET_INFO, &info), 0);
+	ASSERT_GT((info.mask & PIDFD_INFO_COREDUMP), 0);
+	ASSERT_GT((info.coredump_mask & PIDFD_COREDUMPED), 0);
+
+	waitpid(pid_coredump_server, &status, 0);
+	self->pid_coredump_server = -ESRCH;
+	ASSERT_TRUE(WIFEXITED(status));
+	ASSERT_EQ(WEXITSTATUS(status), 0);
+
+	ASSERT_EQ(stat("/tmp/coredump.file", &st), 0);
+	ASSERT_GT(st.st_size, 0);
+	/*
+	 * We should somehow validate the produced core file.
+	 * For now just allow for visual inspection
+	 */
+	system("file /tmp/coredump.file");
+}
+
+TEST_F(coredump, socket_recycled_cookie)
+{
+	int fd, pidfd, ret, status;
+	FILE *file;
+	pid_t pid, pid_coredump_server;
+	struct stat st;
+	char core_file[PATH_MAX];
+	struct pidfd_info info = {};
+	int ipc_sockets[2];
+	char c;
+
+	ASSERT_EQ(unshare(CLONE_NEWNS), 0);
+	ASSERT_EQ(mount(NULL, "/", NULL, MS_PRIVATE | MS_REC, NULL), 0);
+	ASSERT_EQ(mount(NULL, "/tmp", "tmpfs", 0, NULL), 0);
+
+	ret = socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, ipc_sockets);
+	ASSERT_EQ(ret, 0);
+
+	pid_coredump_server = fork();
+	ASSERT_GE(pid_coredump_server, 0);
+	if (pid_coredump_server == 0) {
+		int fd_server, fd_coredump, fd_peer_pidfd, fd_core_file;
+		__u64 peer_cookie, server_cookie;
+		socklen_t fd_peer_pidfd_len, peer_cookie_len, server_cookie_len;
+		struct sockaddr_un coredump_sk = {
+			.sun_family = AF_UNIX,
+		};
+		size_t coredump_sk_len;
+
+		close(ipc_sockets[0]);
+
+		fd_server = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+		if (fd_server < 0)
+			_exit(EXIT_FAILURE);
+
+		server_cookie_len = sizeof(server_cookie);
+		ret = getsockopt(fd_server, SOL_SOCKET, SO_COOKIE,
+				 &server_cookie, &server_cookie_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve cookie for coredump socket server\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		/* Write invalid socket cookie to core_pattern. */
+		coredump_sk_len = snprintf(coredump_sk.sun_path,
+					   sizeof(coredump_sk.sun_path),
+					   "@coredump.socket %" PRIu64, 0);
+		if (coredump_sk_len < 0 || coredump_sk_len >= sizeof(coredump_sk.sun_path)) {
+			fprintf(stderr, "Unable to create coredump socket path\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		file = fopen("/proc/sys/kernel/core_pattern", "w");
+		if (!file) {
+			fprintf(stderr, "Unable to open core_pattern\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = fprintf(file, "%s", coredump_sk.sun_path);
+		fclose(file);
+		if (ret < 0) {
+			fprintf(stderr, "Unable to write to core_pattern\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		coredump_sk.sun_path[0] = '\0';
+		memcpy(coredump_sk.sun_path, "\0coredump.socket", sizeof("coredump.socket"));
+		coredump_sk_len = offsetof(struct sockaddr_un, sun_path) + sizeof("coredump.socket");
+		ret = bind(fd_server, (const struct sockaddr *)&coredump_sk, coredump_sk_len);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to bind coredump socket\n");
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = listen(fd_server, 1);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to listen on coredump socket\n");
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (write_nointr(ipc_sockets[1], "1", 1) < 0) {
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		close(ipc_sockets[1]);
+
+		fd_coredump = accept4(fd_server, NULL, NULL, SOCK_CLOEXEC);
+		if (fd_coredump < 0) {
+			fprintf(stderr, "Failed to accept coredump socket connection\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		peer_cookie_len = sizeof(peer_cookie);
+		ret = getsockopt(fd_coredump, SOL_SOCKET, SO_COOKIE,
+				 &peer_cookie, &peer_cookie_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve cookie for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		fd_peer_pidfd_len = sizeof(fd_peer_pidfd);
+		ret = getsockopt(fd_coredump, SOL_SOCKET, SO_PEERPIDFD,
+				 &fd_peer_pidfd, &fd_peer_pidfd_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve peer pidfd for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		memset(&info, 0, sizeof(info));
+		info.mask = PIDFD_INFO_EXIT | PIDFD_INFO_COREDUMP;
+		ret = ioctl(fd_peer_pidfd, PIDFD_GET_INFO, &info);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to retrieve pidfd info from peer pidfd for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!(info.mask & PIDFD_INFO_COREDUMP)) {
+			fprintf(stderr, "Missing coredump information from coredumping task\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!(info.coredump_mask & PIDFD_COREDUMPED)) {
+			fprintf(stderr, "Received connection from non-coredumping task\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!info.coredump_cookie) {
+			fprintf(stderr, "Missing coredump cookie\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (info.coredump_cookie != peer_cookie) {
+			fprintf(stderr, "Mismatching coredump cookies\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		fd_core_file = creat("/tmp/coredump.file", 0644);
+		if (fd_core_file < 0) {
+			fprintf(stderr, "Failed to create coredump file\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		for (;;) {
+			char buffer[4096];
+			ssize_t bytes_read, bytes_write;
+
+			bytes_read = read(fd_coredump, buffer, sizeof(buffer));
+			if (bytes_read < 0) {
+				close(fd_coredump);
+				close(fd_server);
+				close(fd_peer_pidfd);
+				close(fd_core_file);
+				_exit(EXIT_FAILURE);
+			}
+
+			if (bytes_read == 0)
+				break;
+
+			bytes_write = write(fd_core_file, buffer, bytes_read);
+			if (bytes_read != bytes_write) {
+				close(fd_coredump);
+				close(fd_server);
+				close(fd_peer_pidfd);
+				close(fd_core_file);
+				_exit(EXIT_FAILURE);
+			}
+		}
+
+		close(fd_coredump);
+		close(fd_server);
+		close(fd_peer_pidfd);
+		close(fd_core_file);
+		_exit(EXIT_SUCCESS);
+	}
+	self->pid_coredump_server = pid_coredump_server;
+
+	EXPECT_EQ(close(ipc_sockets[1]), 0);
+	ASSERT_EQ(read_nointr(ipc_sockets[0], &c, 1), 1);
+	EXPECT_EQ(close(ipc_sockets[0]), 0);
+
+	pid = fork();
+	ASSERT_GE(pid, 0);
+	if (pid == 0)
+		crashing_child();
+
+	pidfd = sys_pidfd_open(pid, 0);
+	ASSERT_GE(pidfd, 0);
+
+	waitpid(pid, &status, 0);
+	ASSERT_TRUE(WIFSIGNALED(status));
+	ASSERT_FALSE(WCOREDUMP(status));
+
+	info.mask = PIDFD_INFO_EXIT | PIDFD_INFO_COREDUMP;
+	ASSERT_EQ(ioctl(pidfd, PIDFD_GET_INFO, &info), 0);
+	ASSERT_GT((info.mask & PIDFD_INFO_COREDUMP), 0);
+	ASSERT_EQ((info.coredump_mask & PIDFD_COREDUMPED), 0);
+
+	ASSERT_EQ(kill(pid_coredump_server, SIGKILL), 0);
+	waitpid(pid_coredump_server, &status, 0);
+	self->pid_coredump_server = -ESRCH;
+	ASSERT_TRUE(WIFSIGNALED(status));
+	ASSERT_EQ(WTERMSIG(status), SIGKILL);
+
+	ASSERT_NE(stat("/tmp/coredump.file", &st), 0);
+	ASSERT_EQ(errno, ENOENT);
+}
+
+TEST_F(coredump, socket_missing_cookie)
+{
+	int fd, pidfd, ret, status;
+	FILE *file;
+	pid_t pid, pid_coredump_server;
+	struct stat st;
+	char core_file[PATH_MAX];
+	struct pidfd_info info = {};
+	int ipc_sockets[2];
+	char c;
+
+	ASSERT_EQ(unshare(CLONE_NEWNS), 0);
+	ASSERT_EQ(mount(NULL, "/", NULL, MS_PRIVATE | MS_REC, NULL), 0);
+	ASSERT_EQ(mount(NULL, "/tmp", "tmpfs", 0, NULL), 0);
+
+	ret = socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, ipc_sockets);
+	ASSERT_EQ(ret, 0);
+
+	pid_coredump_server = fork();
+	ASSERT_GE(pid_coredump_server, 0);
+	if (pid_coredump_server == 0) {
+		int fd_server, fd_coredump, fd_peer_pidfd, fd_core_file;
+		__u64 peer_cookie, server_cookie;
+		socklen_t fd_peer_pidfd_len, peer_cookie_len, server_cookie_len;
+		struct sockaddr_un coredump_sk = {
+			.sun_family = AF_UNIX,
+		};
+		size_t coredump_sk_len;
+
+		close(ipc_sockets[0]);
+
+		fd_server = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+		if (fd_server < 0)
+			_exit(EXIT_FAILURE);
+
+		server_cookie_len = sizeof(server_cookie);
+		ret = getsockopt(fd_server, SOL_SOCKET, SO_COOKIE,
+				 &server_cookie, &server_cookie_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve cookie for coredump socket server\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		/* Don't write socket cookie to core_pattern. */
+		coredump_sk_len = snprintf(coredump_sk.sun_path,
+					   sizeof(coredump_sk.sun_path),
+					   "@coredump.socket");
+		if (coredump_sk_len < 0 || coredump_sk_len >= sizeof(coredump_sk.sun_path)) {
+			fprintf(stderr, "Unable to create coredump socket path\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		file = fopen("/proc/sys/kernel/core_pattern", "w");
+		if (!file) {
+			fprintf(stderr, "Unable to open core_pattern\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = fprintf(file, "%s", coredump_sk.sun_path);
+		fclose(file);
+		if (ret < 0) {
+			fprintf(stderr, "Unable to write to core_pattern\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		coredump_sk.sun_path[0] = '\0';
+		memcpy(coredump_sk.sun_path, "\0coredump.socket", sizeof("coredump.socket"));
+		coredump_sk_len = offsetof(struct sockaddr_un, sun_path) + sizeof("coredump.socket");
+		ret = bind(fd_server, (const struct sockaddr *)&coredump_sk, coredump_sk_len);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to bind coredump socket\n");
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = listen(fd_server, 1);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to listen on coredump socket\n");
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (write_nointr(ipc_sockets[1], "1", 1) < 0) {
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		close(ipc_sockets[1]);
+
+		fd_coredump = accept4(fd_server, NULL, NULL, SOCK_CLOEXEC);
+		if (fd_coredump < 0) {
+			fprintf(stderr, "Failed to accept coredump socket connection\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		peer_cookie_len = sizeof(peer_cookie);
+		ret = getsockopt(fd_coredump, SOL_SOCKET, SO_COOKIE,
+				 &peer_cookie, &peer_cookie_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve cookie for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		fd_peer_pidfd_len = sizeof(fd_peer_pidfd);
+		ret = getsockopt(fd_coredump, SOL_SOCKET, SO_PEERPIDFD,
+				 &fd_peer_pidfd, &fd_peer_pidfd_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve peer pidfd for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		memset(&info, 0, sizeof(info));
+		info.mask = PIDFD_INFO_EXIT | PIDFD_INFO_COREDUMP;
+		ret = ioctl(fd_peer_pidfd, PIDFD_GET_INFO, &info);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to retrieve pidfd info from peer pidfd for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!(info.mask & PIDFD_INFO_COREDUMP)) {
+			fprintf(stderr, "Missing coredump information from coredumping task\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!(info.coredump_mask & PIDFD_COREDUMPED)) {
+			fprintf(stderr, "Received connection from non-coredumping task\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!info.coredump_cookie) {
+			fprintf(stderr, "Missing coredump cookie\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (info.coredump_cookie != peer_cookie) {
+			fprintf(stderr, "Mismatching coredump cookies\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		fd_core_file = creat("/tmp/coredump.file", 0644);
+		if (fd_core_file < 0) {
+			fprintf(stderr, "Failed to create coredump file\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		for (;;) {
+			char buffer[4096];
+			ssize_t bytes_read, bytes_write;
+
+			bytes_read = read(fd_coredump, buffer, sizeof(buffer));
+			if (bytes_read < 0) {
+				close(fd_coredump);
+				close(fd_server);
+				close(fd_peer_pidfd);
+				close(fd_core_file);
+				_exit(EXIT_FAILURE);
+			}
+
+			if (bytes_read == 0)
+				break;
+
+			bytes_write = write(fd_core_file, buffer, bytes_read);
+			if (bytes_read != bytes_write) {
+				close(fd_coredump);
+				close(fd_server);
+				close(fd_peer_pidfd);
+				close(fd_core_file);
+				_exit(EXIT_FAILURE);
+			}
+		}
+
+		close(fd_coredump);
+		close(fd_server);
+		close(fd_peer_pidfd);
+		close(fd_core_file);
+		_exit(EXIT_SUCCESS);
+	}
+	self->pid_coredump_server = pid_coredump_server;
+
+	EXPECT_EQ(close(ipc_sockets[1]), 0);
+	ASSERT_EQ(read_nointr(ipc_sockets[0], &c, 1), 1);
+	EXPECT_EQ(close(ipc_sockets[0]), 0);
+
+	pid = fork();
+	ASSERT_GE(pid, 0);
+	if (pid == 0)
+		crashing_child();
+
+	pidfd = sys_pidfd_open(pid, 0);
+	ASSERT_GE(pidfd, 0);
+
+	waitpid(pid, &status, 0);
+	ASSERT_TRUE(WIFSIGNALED(status));
+	ASSERT_FALSE(WCOREDUMP(status));
+
+	info.mask = PIDFD_INFO_EXIT | PIDFD_INFO_COREDUMP;
+	ASSERT_EQ(ioctl(pidfd, PIDFD_GET_INFO, &info), 0);
+	ASSERT_GT((info.mask & PIDFD_INFO_COREDUMP), 0);
+	ASSERT_EQ((info.coredump_mask & PIDFD_COREDUMPED), 0);
+
+	ASSERT_EQ(kill(pid_coredump_server, SIGKILL), 0);
+	waitpid(pid_coredump_server, &status, 0);
+	self->pid_coredump_server = -ESRCH;
+	ASSERT_TRUE(WIFSIGNALED(status));
+	ASSERT_EQ(WTERMSIG(status), SIGKILL);
+
+	ASSERT_NE(stat("/tmp/coredump.file", &st), 0);
+	ASSERT_EQ(errno, ENOENT);
+}
+
+TEST_F(coredump, socket_detect_userspace_client)
+{
+	int fd, pidfd, ret, status;
+	FILE *file;
+	pid_t pid, pid_coredump_server;
+	struct stat st;
+	char core_file[PATH_MAX];
+	struct pidfd_info info = {};
+	int ipc_sockets[2];
+	char c;
+
+	ASSERT_EQ(unshare(CLONE_NEWNS), 0);
+	ASSERT_EQ(mount(NULL, "/", NULL, MS_PRIVATE | MS_REC, NULL), 0);
+	ASSERT_EQ(mount(NULL, "/tmp", "tmpfs", 0, NULL), 0);
+
+	ret = socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, ipc_sockets);
+	ASSERT_EQ(ret, 0);
+
+	pid_coredump_server = fork();
+	ASSERT_GE(pid_coredump_server, 0);
+	if (pid_coredump_server == 0) {
+		int fd_server, fd_coredump, fd_peer_pidfd, fd_core_file;
+		__u64 peer_cookie, server_cookie;
+		socklen_t fd_peer_pidfd_len, peer_cookie_len, server_cookie_len;
+		struct sockaddr_un coredump_sk = {
+			.sun_family = AF_UNIX,
+		};
+		size_t coredump_sk_len;
+
+		close(ipc_sockets[0]);
+
+		fd_server = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+		if (fd_server < 0)
+			_exit(EXIT_FAILURE);
+
+		server_cookie_len = sizeof(server_cookie);
+		ret = getsockopt(fd_server, SOL_SOCKET, SO_COOKIE,
+				 &server_cookie, &server_cookie_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve cookie for coredump socket server\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		coredump_sk_len = snprintf(coredump_sk.sun_path,
+					   sizeof(coredump_sk.sun_path),
+					   "@coredump.socket %" PRIu64, server_cookie);
+		if (coredump_sk_len < 0 || coredump_sk_len >= sizeof(coredump_sk.sun_path)) {
+			fprintf(stderr, "Unable to create coredump socket path\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		file = fopen("/proc/sys/kernel/core_pattern", "w");
+		if (!file) {
+			fprintf(stderr, "Unable to open core_pattern\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = fprintf(file, "%s", coredump_sk.sun_path);
+		fclose(file);
+		if (ret < 0) {
+			fprintf(stderr, "Unable to write to core_pattern\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		coredump_sk.sun_path[0] = '\0';
+		memcpy(coredump_sk.sun_path, "\0coredump.socket", sizeof("coredump.socket"));
+		coredump_sk_len = offsetof(struct sockaddr_un, sun_path) + sizeof("coredump.socket");
+		ret = bind(fd_server, (const struct sockaddr *)&coredump_sk, coredump_sk_len);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to bind coredump socket\n");
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		ret = listen(fd_server, 1);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to listen on coredump socket\n");
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (write_nointr(ipc_sockets[1], "1", 1) < 0) {
+			close(fd_server);
+			close(ipc_sockets[1]);
+			_exit(EXIT_FAILURE);
+		}
+
+		close(ipc_sockets[1]);
+
+		fd_coredump = accept4(fd_server, NULL, NULL, SOCK_CLOEXEC);
+		if (fd_coredump < 0) {
+			fprintf(stderr, "Failed to accept coredump socket connection\n");
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		peer_cookie_len = sizeof(peer_cookie);
+		ret = getsockopt(fd_coredump, SOL_SOCKET, SO_COOKIE,
+				 &peer_cookie, &peer_cookie_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve cookie for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		fd_peer_pidfd_len = sizeof(fd_peer_pidfd);
+		ret = getsockopt(fd_coredump, SOL_SOCKET, SO_PEERPIDFD,
+				 &fd_peer_pidfd, &fd_peer_pidfd_len);
+		if (ret < 0) {
+			fprintf(stderr, "%m - Failed to retrieve peer pidfd for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			_exit(EXIT_FAILURE);
+		}
+
+		memset(&info, 0, sizeof(info));
+		info.mask = PIDFD_INFO_EXIT | PIDFD_INFO_COREDUMP;
+		ret = ioctl(fd_peer_pidfd, PIDFD_GET_INFO, &info);
+		if (ret < 0) {
+			fprintf(stderr, "Failed to retrieve pidfd info from peer pidfd for coredump socket connection\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (!(info.mask & PIDFD_INFO_COREDUMP)) {
+			fprintf(stderr, "Missing coredump information from coredumping task\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (info.coredump_mask & PIDFD_COREDUMPED) {
+			fprintf(stderr, "Received unexpected connection from coredumping task\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		if (info.coredump_cookie) {
+			fprintf(stderr, "Received unexpected coredump cookie\n");
+			close(fd_coredump);
+			close(fd_server);
+			close(fd_peer_pidfd);
+			_exit(EXIT_FAILURE);
+		}
+
+		close(fd_coredump);
+		close(fd_server);
+		close(fd_peer_pidfd);
+		close(fd_core_file);
+		_exit(EXIT_SUCCESS);
+	}
+	self->pid_coredump_server = pid_coredump_server;
+
+	EXPECT_EQ(close(ipc_sockets[1]), 0);
+	ASSERT_EQ(read_nointr(ipc_sockets[0], &c, 1), 1);
+	EXPECT_EQ(close(ipc_sockets[0]), 0);
+
+	pid = fork();
+	ASSERT_GE(pid, 0);
+	if (pid == 0) {
+		struct sockaddr_un coredump_sk = {
+			.sun_family = AF_UNIX,
+		};
+		socklen_t coredump_sk_len;
+		int fd_socket;
+		ssize_t ret;
+
+		fd_socket = socket(AF_UNIX, SOCK_STREAM, 0);
+		if (fd_socket < 0)
+			_exit(EXIT_FAILURE);
+
+
+		coredump_sk.sun_path[0] = '\0';
+		memcpy(coredump_sk.sun_path, "\0coredump.socket", sizeof("coredump.socket"));
+		coredump_sk_len = offsetof(struct sockaddr_un, sun_path) + sizeof("coredump.socket");
+
+		ret = connect(fd_socket, (const struct sockaddr *)&coredump_sk, coredump_sk_len);
+		if (ret < 0)
+			_exit(EXIT_FAILURE);
+
+		(void *)write(fd_socket, &(char){ 0 }, 1);
+		close(fd_socket);
+		_exit(EXIT_SUCCESS);
+	}
+
+	pidfd = sys_pidfd_open(pid, 0);
+	ASSERT_GE(pidfd, 0);
+
+	waitpid(pid, &status, 0);
+	ASSERT_TRUE(WIFEXITED(status));
+	ASSERT_EQ(WEXITSTATUS(status), 0);
+
+	info.mask = PIDFD_INFO_EXIT | PIDFD_INFO_COREDUMP;
+	ASSERT_EQ(ioctl(pidfd, PIDFD_GET_INFO, &info), 0);
+	ASSERT_GT((info.mask & PIDFD_INFO_COREDUMP), 0);
+	ASSERT_EQ((info.coredump_mask & PIDFD_COREDUMPED), 0);
+
+	waitpid(pid_coredump_server, &status, 0);
+	self->pid_coredump_server = -ESRCH;
+	ASSERT_TRUE(WIFEXITED(status));
+	ASSERT_EQ(WEXITSTATUS(status), 0);
+
+	ASSERT_NE(stat("/tmp/coredump.file", &st), 0);
+	ASSERT_EQ(errno, ENOENT);
 }
 
 TEST_HARNESS_MAIN
