@@ -5,7 +5,9 @@
 #include <linux/limits.h>
 #include <pthread.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "../kselftest_harness.h"
@@ -152,6 +154,54 @@ TEST_F_TIMEOUT(coredump, stackdump, 120)
 	ASSERT_EQ(i, 1 + NUM_THREAD_SPAWN);
 
 	fclose(file);
+}
+
+TEST_F(coredump, socket)
+{
+	int fd, ret, status;
+	FILE *file;
+	pid_t pid, pid_socat;
+	struct stat st;
+	char core_file[PATH_MAX];
+
+	ASSERT_EQ(unshare(CLONE_NEWNS), 0);
+	ASSERT_EQ(mount(NULL, "/", NULL, MS_PRIVATE | MS_REC, NULL), 0);
+	ASSERT_EQ(mount(NULL, "/tmp", "tmpfs", 0, NULL), 0);
+
+	pid_socat = fork();
+	ASSERT_GE(pid_socat, 0);
+	if (pid_socat == 0) {
+		execlp("socat", "socat",
+		       "unix-listen:/tmp/coredump.socket,fork",
+		       "FILE:/tmp/coredump_file,create,append,trunc",
+		       (char *)NULL);
+		_exit(EXIT_FAILURE);
+	}
+
+	file = fopen("/proc/sys/kernel/core_pattern", "w");
+	ASSERT_NE(NULL, file);
+
+	ret = fprintf(file, ":/tmp/coredump.socket");
+	ASSERT_EQ(ret, strlen(":/tmp/coredump.socket"));
+	ASSERT_EQ(fclose(file), 0);
+
+	pid = fork();
+	ASSERT_GE(pid, 0);
+	if (pid == 0)
+		crashing_child();
+
+	waitpid(pid, &status, 0);
+	ASSERT_TRUE(WIFSIGNALED(status));
+	ASSERT_TRUE(WCOREDUMP(status));
+
+	ASSERT_EQ(kill(pid_socat, SIGTERM), 0);
+	waitpid(pid_socat, &status, 0);
+	ASSERT_TRUE(WIFEXITED(status));
+	ASSERT_EQ(WEXITSTATUS(status), 143);
+
+	/* We should somehow validate the produced core file. */
+	ASSERT_EQ(stat("/tmp/coredump_file", &st), 0);
+	ASSERT_GT(st.st_size, 0);
 }
 
 TEST_HARNESS_MAIN
