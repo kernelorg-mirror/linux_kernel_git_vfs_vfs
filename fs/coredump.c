@@ -48,6 +48,7 @@
 #include <linux/net.h>
 #include <uapi/linux/un.h>
 #include <linux/socket.h>
+#include <net/sock.h>
 
 #include <linux/uaccess.h>
 #include <asm/mmu_context.h>
@@ -594,6 +595,8 @@ static int umh_coredump_setup(struct subprocess_info *info, struct cred *new)
 		if (IS_ERR(pidfs_file))
 			return PTR_ERR(pidfs_file);
 
+		pidfs_coredump(cp);
+
 		/*
 		 * Usermode helpers are childen of either
 		 * system_unbound_wq or of kthreadd. So we know that
@@ -904,6 +907,8 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 			goto close_fail;
 
 		cprm.limit = RLIM_INFINITY;
+		cprm.pid = task_tgid(current);
+		pidfs_coredump(&cprm);
 #endif
 		cprm.file = no_free_ptr(file);
 		break;
