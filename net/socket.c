@@ -3603,7 +3603,10 @@ int kernel_connect(struct socket *sock, struct sockaddr *addr, int addrlen,
 {
 	struct sockaddr_storage address;
 
-	memcpy(&address, addr, addrlen);
+	if (flags & SOCK_COREDUMP)
+		memcpy(&address, addr, addrlen + sizeof(sock->sk->sk_cookie));
+	else
+		memcpy(&address, addr, addrlen);
 
 	return READ_ONCE(sock->ops)->connect(sock, (struct sockaddr *)&address,
 					     addrlen, flags);
