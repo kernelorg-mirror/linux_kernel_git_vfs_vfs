@@ -35,6 +35,7 @@ struct pidfs_exit_info {
 	__u64 cgroupid;
 	__s32 exit_code;
 	__u32 coredump_mask;
+	__u64 coredump_cookie;
 };
 
 struct pidfs_inode {
@@ -300,6 +301,7 @@ static long pidfd_info(struct file *file, unsigned int cmd, unsigned long arg)
 
 	if (mask & PIDFD_INFO_COREDUMP) {
 		kinfo.mask |= PIDFD_INFO_COREDUMP;
+		kinfo.coredump_cookie = READ_ONCE(pidfs_i(inode)->__pei.coredump_cookie);
 		kinfo.coredump_mask = READ_ONCE(pidfs_i(inode)->__pei.coredump_mask);
 	}
 
@@ -321,8 +323,10 @@ static long pidfd_info(struct file *file, unsigned int cmd, unsigned long arg)
 
 	if (!(kinfo.mask & PIDFD_INFO_COREDUMP)) {
 		task_lock(task);
-		if (task->mm)
+		if (task->mm) {
+			kinfo.coredump_cookie = READ_ONCE(pidfs_i(inode)->__pei.coredump_cookie);
 			kinfo.coredump_mask = pidfs_coredump_mask(task->mm->flags);
+		}
 		task_unlock(task);
 	}
 
@@ -587,6 +591,20 @@ void pidfs_exit(struct task_struct *tsk)
 		smp_store_release(&pidfs_i(inode)->exit_info, &pidfs_i(inode)->__pei);
 		dput(dentry);
 	}
+}
+
+void pidfs_coredump_cookie(struct pid *pid, u64 coredump_cookie)
+{
+	struct pidfs_exit_info *exit_info;
+	struct dentry *dentry = pid->stashed;
+	struct inode *inode;
+
+	if (WARN_ON_ONCE(!dentry))
+		return;
+
+	inode = d_inode(dentry);
+	exit_info = &pidfs_i(inode)->__pei;
+	smp_store_release(&exit_info->coredump_cookie, coredump_cookie);
 }
 
 void pidfs_coredump(const struct coredump_params *cprm)

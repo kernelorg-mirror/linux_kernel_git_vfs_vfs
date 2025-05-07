@@ -101,6 +101,7 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/pidfs.h>
+#include <linux/sock_diag.h>
 #include <net/af_unix.h>
 #include <net/net_namespace.h>
 #include <net/scm.h>
@@ -771,6 +772,7 @@ static void unix_release_sock(struct sock *sk, int embrion)
 
 struct unix_peercred {
 	struct pid *peer_pid;
+	u64 cookie;
 	const struct cred *peer_cred;
 };
 
@@ -806,6 +808,8 @@ static void drop_peercred(struct unix_peercred *peercred)
 static inline void init_peercred(struct sock *sk,
 				 const struct unix_peercred *peercred)
 {
+	if (peercred->cookie)
+		pidfs_coredump_cookie(peercred->peer_pid, peercred->cookie);
 	sk->sk_peer_pid = peercred->peer_pid;
 	sk->sk_peer_cred = peercred->peer_cred;
 }
@@ -1717,6 +1721,9 @@ restart:
 	unix_peer(newsk)	= sk;
 	newsk->sk_state		= TCP_ESTABLISHED;
 	newsk->sk_type		= sk->sk_type;
+	/* Prepare a new socket cookie for the receiver. */
+	if (flags & SOCK_COREDUMP)
+		peercred.cookie = sock_gen_cookie(newsk);
 	init_peercred(newsk, &peercred);
 	newu = unix_sk(newsk);
 	newu->listener = other;

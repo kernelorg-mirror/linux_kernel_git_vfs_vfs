@@ -907,7 +907,8 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 		 */
 		retval = kernel_connect(socket,
 					(struct sockaddr *)(&coredump_unix_socket),
-					COREDUMP_UNIX_SOCKET_ADDR_SIZE, O_NONBLOCK);
+					COREDUMP_UNIX_SOCKET_ADDR_SIZE, O_NONBLOCK |
+					SOCK_COREDUMP);
 
 		/*
 		 * ... So we can safely put our pidfs reference now...

@@ -108,6 +108,7 @@ struct pidfd_info {
 	__s32 exit_code;
 	__u32 coredump_mask;
 	__u32 __spare1;
+	__u64 coredump_cookie;
 };
 
 #define PIDFS_IOCTL_MAGIC 0xFF
