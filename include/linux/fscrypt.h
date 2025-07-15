@@ -195,18 +195,6 @@ struct fscrypt_operations {
 int fscrypt_d_revalidate(struct inode *dir, const struct qstr *name,
 			 struct dentry *dentry, unsigned int flags);
 
-static inline struct fscrypt_inode_info *
-fscrypt_get_inode_info(const struct inode *inode)
-{
-	/*
-	 * Pairs with the cmpxchg_release() in fscrypt_setup_encryption_info().
-	 * I.e., another task may publish ->i_crypt_info concurrently, executing
-	 * a RELEASE barrier.  We need to use smp_load_acquire() here to safely
-	 * ACQUIRE the memory the other task published.
-	 */
-	return smp_load_acquire(&inode->i_crypt_info);
-}
-
 /**
  * fscrypt_needs_contents_encryption() - check whether an inode needs
  *					 contents encryption
@@ -385,7 +373,7 @@ int fscrypt_ioctl_get_key_status(struct file *filp, void __user *arg);
 /* keysetup.c */
 int fscrypt_prepare_new_inode(struct inode *dir, struct inode *inode,
 			      bool *encrypt_ret);
-void fscrypt_put_encryption_info(struct inode *inode);
+void put_crypt_info(struct fscrypt_inode_info *ci);
 void fscrypt_free_inode(struct inode *inode);
 int fscrypt_drop_inode(struct inode *inode);
 
@@ -446,10 +434,37 @@ static inline void fscrypt_set_ops(struct super_block *sb,
 {
 	sb->s_cop = s_cop;
 }
-#else  /* !CONFIG_FS_ENCRYPTION */
+
+static inline int fscrypt_inode_info_set(struct fscrypt_inode_info *crypt_info,
+					 struct fscrypt_inode_info **p)
+{
+	if (cmpxchg_release(p, NULL, crypt_info) != NULL)
+		return -EEXIST;
+	return 0;
+}
 
 static inline struct fscrypt_inode_info *
-fscrypt_get_inode_info(const struct inode *inode)
+fscrypt_inode_info_get(struct fscrypt_inode_info **crypt_info)
+{
+	/*
+	 * Pairs with the cmpxchg_release() in fscrypt_inode_info_set(). I.e.,
+	 * another task may publish crypt_info concurrently, executing a
+	 * RELEASE barrier.  We need to use smp_load_acquire() here to safely
+	 * ACQUIRE the memory the other task published (could be a READ_ONCE()
+	 * really).
+	 */
+	return smp_load_acquire(crypt_info);
+}
+#else  /* !CONFIG_FS_ENCRYPTION */
+
+static inline int fscrypt_inode_info_set(struct fscrypt_inode_info *crypt_info,
+					 struct fscrypt_inode_info **p)
+{
+	return 0;
+}
+
+static inline struct fscrypt_inode_info *
+fscrypt_inode_info_get(const struct fscrypt_inode_info **crypt_info)
 {
 	return NULL;
 }
@@ -639,7 +654,7 @@ static inline int fscrypt_prepare_new_inode(struct inode *dir,
 	return 0;
 }
 
-static inline void fscrypt_put_encryption_info(struct inode *inode)
+static inline void put_crypt_info(struct fscrypt_inode_info *ci)
 {
 	return;
 }
@@ -930,7 +945,7 @@ static inline bool fscrypt_inode_uses_fs_layer_crypto(const struct inode *inode)
  */
 static inline bool fscrypt_has_encryption_key(const struct inode *inode)
 {
-	return fscrypt_get_inode_info(inode) != NULL;
+	return inode->i_op->get_fscrypt(inode) != NULL;
 }
 
 /**

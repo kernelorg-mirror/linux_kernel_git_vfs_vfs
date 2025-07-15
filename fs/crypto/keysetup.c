@@ -568,7 +568,7 @@ out_release_key:
 	return err;
 }
 
-static void put_crypt_info(struct fscrypt_inode_info *ci)
+void put_crypt_info(struct fscrypt_inode_info *ci)
 {
 	struct fscrypt_master_key *mk;
 
@@ -597,6 +597,7 @@ static void put_crypt_info(struct fscrypt_inode_info *ci)
 	memzero_explicit(ci, sizeof(*ci));
 	kmem_cache_free(fscrypt_inode_info_cachep, ci);
 }
+EXPORT_SYMBOL(put_crypt_info);
 
 static int
 fscrypt_setup_encryption_info(struct inode *inode,
@@ -644,7 +645,7 @@ fscrypt_setup_encryption_info(struct inode *inode,
 	 * fscrypt_get_inode_info().  I.e., here we publish ->i_crypt_info with
 	 * a RELEASE barrier so that other tasks can ACQUIRE it.
 	 */
-	if (cmpxchg_release(&inode->i_crypt_info, NULL, crypt_info) == NULL) {
+	if (!inode->i_op->set_fscrypt(crypt_info, inode)) {
 		/*
 		 * We won the race and set ->i_crypt_info to our crypt_info.
 		 * Now link it into the master key's inode list.
@@ -789,20 +790,6 @@ int fscrypt_prepare_new_inode(struct inode *dir, struct inode *inode,
 EXPORT_SYMBOL_GPL(fscrypt_prepare_new_inode);
 
 /**
- * fscrypt_put_encryption_info() - free most of an inode's fscrypt data
- * @inode: an inode being evicted
- *
- * Free the inode's fscrypt_inode_info.  Filesystems must call this when the
- * inode is being evicted.  An RCU grace period need not have elapsed yet.
- */
-void fscrypt_put_encryption_info(struct inode *inode)
-{
-	put_crypt_info(inode->i_crypt_info);
-	inode->i_crypt_info = NULL;
-}
-EXPORT_SYMBOL(fscrypt_put_encryption_info);
-
-/**
  * fscrypt_free_inode() - free an inode's fscrypt data requiring RCU delay
  * @inode: an inode being freed
  *
@@ -830,7 +817,7 @@ EXPORT_SYMBOL(fscrypt_free_inode);
  */
 int fscrypt_drop_inode(struct inode *inode)
 {
-	const struct fscrypt_inode_info *ci = fscrypt_get_inode_info(inode);
+	const struct fscrypt_inode_info *ci = inode->i_op->get_fscrypt(inode);
 
 	/*
 	 * If ci is NULL, then the inode doesn't have an encryption key set up

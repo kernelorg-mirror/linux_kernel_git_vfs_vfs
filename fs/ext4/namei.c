@@ -4203,6 +4203,20 @@ static int ext4_rename2(struct mnt_idmap *idmap,
 	return ext4_rename(idmap, old_dir, old_dentry, new_dir, new_dentry, flags);
 }
 
+#ifdef CONFIG_FS_ENCRYPTION
+struct fscrypt_inode_info *ext4_get_fscrypt(const struct inode *inode)
+{
+	struct ext4_inode_info *ei = EXT4_I(inode);
+	return fscrypt_inode_info_get(&ei->i_fscrypt_info);
+}
+
+int ext4_set_fscrypt(struct fscrypt_inode_info *fscrypt_info, struct inode *inode)
+{
+	struct ext4_inode_info *ei = EXT4_I(inode);
+	return fscrypt_inode_info_set(fscrypt_info, &ei->i_fscrypt_info);
+}
+#endif
+
 /*
  * directories can handle most operations...
  */
@@ -4225,6 +4239,10 @@ const struct inode_operations ext4_dir_inode_operations = {
 	.fiemap         = ext4_fiemap,
 	.fileattr_get	= ext4_fileattr_get,
 	.fileattr_set	= ext4_fileattr_set,
+#ifdef CONFIG_FS_ENCRYPTION
+	.get_fscrypt	= ext4_get_fscrypt,
+	.set_fscrypt	= ext4_set_fscrypt,
+#endif
 };
 
 const struct inode_operations ext4_special_inode_operations = {
@@ -4233,4 +4251,8 @@ const struct inode_operations ext4_special_inode_operations = {
 	.listxattr	= ext4_listxattr,
 	.get_inode_acl	= ext4_get_acl,
 	.set_acl	= ext4_set_acl,
+#ifdef CONFIG_FS_ENCRYPTION
+	.get_fscrypt	= ext4_get_fscrypt,
+	.set_fscrypt	= ext4_set_fscrypt,
+#endif
 };

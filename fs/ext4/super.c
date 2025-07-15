@@ -1412,6 +1412,9 @@ static struct inode *ext4_alloc_inode(struct super_block *sb)
 	INIT_WORK(&ei->i_rsv_conversion_work, ext4_end_io_rsv_work);
 	ext4_fc_init_inode(&ei->vfs_inode);
 	spin_lock_init(&ei->i_fc_lock);
+#ifdef CONFIG_FS_ENCRYPTION
+	ei->i_fscrypt_info = NULL;
+#endif
 	return &ei->vfs_inode;
 }
 
@@ -1509,7 +1512,8 @@ void ext4_clear_inode(struct inode *inode)
 		jbd2_free_inode(EXT4_I(inode)->jinode);
 		EXT4_I(inode)->jinode = NULL;
 	}
-	fscrypt_put_encryption_info(inode);
+	put_crypt_info(EXT4_I(inode)->i_fscrypt_info);
+	EXT4_I(inode)->i_fscrypt_info = NULL;
 	fsverity_cleanup_inode(inode);
 }
 

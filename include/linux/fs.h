@@ -778,10 +778,6 @@ struct inode {
 	struct fsnotify_mark_connector __rcu	*i_fsnotify_marks;
 #endif
 
-#ifdef CONFIG_FS_ENCRYPTION
-	struct fscrypt_inode_info	*i_crypt_info;
-#endif
-
 #ifdef CONFIG_FS_VERITY
 	struct fsverity_info	*i_verity_info;
 #endif
@@ -2257,6 +2253,11 @@ struct inode_operations {
 			    struct dentry *dentry, struct fileattr *fa);
 	int (*fileattr_get)(struct dentry *dentry, struct fileattr *fa);
 	struct offset_ctx *(*get_offset_ctx)(struct inode *inode);
+#ifdef CONFIG_FS_ENCRYPTION
+	struct fscrypt_inode_info *(*get_fscrypt)(const struct inode *inode);
+	int (*set_fscrypt)(struct fscrypt_inode_info *fscrypt_info,
+			   struct inode *inode);
+#endif
 } ____cacheline_aligned;
 
 /* Did the driver provide valid mmap hook configuration? */

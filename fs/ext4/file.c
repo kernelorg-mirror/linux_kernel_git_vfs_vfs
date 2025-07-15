@@ -989,5 +989,9 @@ const struct inode_operations ext4_file_inode_operations = {
 	.fiemap		= ext4_fiemap,
 	.fileattr_get	= ext4_fileattr_get,
 	.fileattr_set	= ext4_fileattr_set,
+#ifdef CONFIG_FS_ENCRYPTION
+	.get_fscrypt	= ext4_get_fscrypt,
+	.set_fscrypt	= ext4_set_fscrypt,
+#endif
 };
 

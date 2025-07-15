@@ -1197,6 +1197,10 @@ struct ext4_inode_info {
 	__u32 i_csum_seed;
 
 	kprojid_t i_projid;
+
+#ifdef CONFIG_FS_ENCRYPTION
+	struct fscrypt_inode_info	*i_fscrypt_info;
+#endif
 };
 
 /*
@@ -3904,6 +3908,11 @@ static inline bool ext4_inode_can_atomic_write(struct inode *inode)
 extern int ext4_block_write_begin(handle_t *handle, struct folio *folio,
 				  loff_t pos, unsigned len,
 				  get_block_t *get_block);
+#ifdef CONFIG_FS_ENCRYPTION
+struct fscrypt_inode_info *ext4_get_fscrypt(const struct inode *inode);
+int ext4_set_fscrypt(struct fscrypt_inode_info *fscrypt_info,struct inode *inode);
+#endif
+
 #endif	/* __KERNEL__ */
 
 #define EFSBADCRC	EBADMSG		/* Bad CRC detected */
