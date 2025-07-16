@@ -53,6 +53,10 @@ static void mbt_free_inode(struct inode *inode)
 }
 
 static const struct super_operations mbt_sops = {
+#ifdef CONFIG_FS_ENCRYPTION
+	.i_fscrypt	= offsetof(struct ext4_inode_info, i_fscrypt_info) -
+			  offsetof(struct ext4_inode_info, vfs_inode),
+#endif
 	.alloc_inode	= mbt_alloc_inode,
 	.free_inode	= mbt_free_inode,
 };
