@@ -2003,6 +2003,10 @@ static int ubifs_reconfigure(struct fs_context *fc)
 }
 
 const struct super_operations ubifs_super_operations = {
+#ifdef CONFIG_FS_ENCRYPTION
+	.i_fscrypt	= offsetof(struct ubifs_inode, i_fscrypt_info) -
+			  offsetof(struct ubifs_inode, vfs_inode),
+#endif
 	.alloc_inode   = ubifs_alloc_inode,
 	.free_inode    = ubifs_free_inode,
 	.put_super     = ubifs_put_super,
