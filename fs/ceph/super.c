@@ -1039,6 +1039,10 @@ void ceph_umount_begin(struct super_block *sb)
 }
 
 static const struct super_operations ceph_super_ops = {
+#ifdef CONFIG_FS_ENCRYPTION
+	.i_fscrypt = offsetof(struct ceph_inode_info, netfs.i_fscrypt_info) -
+		     offsetof(struct ceph_inode_info, netfs.inode),
+#endif
 	.alloc_inode	= ceph_alloc_inode,
 	.free_inode	= ceph_free_inode,
 	.write_inode    = ceph_write_inode,
