@@ -1415,6 +1415,9 @@ static struct inode *ext4_alloc_inode(struct super_block *sb)
 #ifdef CONFIG_FS_ENCRYPTION
 	ei->i_fscrypt_info = NULL;
 #endif
+#ifdef CONFIG_FS_VERITY
+	ei->i_fsverity_info = NULL;
+#endif
 	return &ei->vfs_inode;
 }
 
@@ -1612,6 +1615,10 @@ static const struct quotactl_ops ext4_qctl_operations = {
 static const struct super_operations ext4_sops = {
 #ifdef CONFIG_FS_ENCRYPTION
 	.i_fscrypt	= offsetof(struct ext4_inode_info, i_fscrypt_info) -
+			  offsetof(struct ext4_inode_info, vfs_inode),
+#endif
+#ifdef CONFIG_FS_VERITY
+	.i_fsverity	= offsetof(struct ext4_inode_info, i_fsverity_info) -
 			  offsetof(struct ext4_inode_info, vfs_inode),
 #endif
 	.alloc_inode	= ext4_alloc_inode,
