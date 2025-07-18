@@ -1456,6 +1456,9 @@ static struct inode *f2fs_alloc_inode(struct super_block *sb)
 #ifdef CONFIG_FS_ENCRYPTION
 	fi->i_fscrypt_info = NULL;
 #endif
+#ifdef CONFIG_FS_VERITY
+	fi->i_fsverity_info = NULL;
+#endif
 
 	return &fi->vfs_inode;
 }
@@ -3251,6 +3254,10 @@ void f2fs_quota_off_umount(struct super_block *sb)
 static const struct super_operations f2fs_sops = {
 #ifdef CONFIG_FS_ENCRYPTION
 	.i_fscrypt	= offsetof(struct f2fs_inode_info, i_fscrypt_info) -
+			  offsetof(struct f2fs_inode_info, vfs_inode),
+#endif
+#ifdef CONFIG_FS_VERITY
+	.i_fsverity	= offsetof(struct f2fs_inode_info, i_fsverity_info) -
 			  offsetof(struct f2fs_inode_info, vfs_inode),
 #endif
 	.alloc_inode	= f2fs_alloc_inode,
