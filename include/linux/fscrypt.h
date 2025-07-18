@@ -61,6 +61,10 @@ struct fscrypt_name {
 
 /* Crypto operations for filesystems */
 struct fscrypt_operations {
+	/**
+	 * inode_info_offs - offset of the fscrypt_inode_info in the
+	 */
+	ptrdiff_t inode_info_offs;
 
 	/*
 	 * If set, then fs/crypto/ will allocate a global bounce page pool the
