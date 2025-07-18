@@ -28,6 +28,10 @@
 
 /* Verity operations for filesystems */
 struct fsverity_operations {
+	/**
+	 * inode_info_offs: offset of the fsverity_info structure
+	 */
+	ptrdiff_t inode_info_offs;
 
 	/**
 	 * Begin enabling verity on the given file.
