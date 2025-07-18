@@ -2329,6 +2329,7 @@ enum freeze_holder {
 
 struct super_operations {
 	ptrdiff_t i_fscrypt;
+	ptrdiff_t i_fsverity;
    	struct inode *(*alloc_inode)(struct super_block *sb);
 	void (*destroy_inode)(struct inode *);
 	void (*free_inode)(struct inode *);
