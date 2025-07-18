@@ -128,6 +128,11 @@ struct fsverity_operations {
 
 #ifdef CONFIG_FS_VERITY
 
+static inline struct fsverity_info **fsverity_addr(const struct inode *inode)
+{
+	return ((void *)inode + inode->i_sb->s_vop->inode_info_offs);
+}
+
 static inline struct fsverity_info *fsverity_get_info(const struct inode *inode)
 {
 	/*
@@ -136,6 +141,8 @@ static inline struct fsverity_info *fsverity_get_info(const struct inode *inode)
 	 * executing a RELEASE barrier.  We need to use smp_load_acquire() here
 	 * to safely ACQUIRE the memory the other task published.
 	 */
+	if (inode->i_sb->s_vop->inode_info_offs)
+		return smp_load_acquire(fsverity_addr(inode));
 	return smp_load_acquire(&inode->i_verity_info);
 }
 
@@ -164,7 +171,7 @@ void __fsverity_cleanup_inode(struct inode *inode);
  */
 static inline void fsverity_cleanup_inode(struct inode *inode)
 {
-	if (inode->i_verity_info)
+	if (IS_VERITY(inode))
 		__fsverity_cleanup_inode(inode);
 }
 
