@@ -2395,6 +2395,10 @@ static long btrfs_free_cached_objects(struct super_block *sb, struct shrink_cont
 }
 
 static const struct super_operations btrfs_super_ops = {
+#ifdef CONFIG_FS_VERITY
+	.i_fsverity	= offsetof(struct btrfs_inode, i_fsverity_info) -
+			  offsetof(struct btrfs_inode, vfs_inode),
+#endif
 	.drop_inode	= btrfs_drop_inode,
 	.evict_inode	= btrfs_evict_inode,
 	.put_super	= btrfs_put_super,
