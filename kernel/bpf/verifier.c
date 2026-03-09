@@ -25289,7 +25289,6 @@ BTF_ID(func, __module_put_and_kthread_exit)
 BTF_ID(func, __x64_sys_exit)
 BTF_ID(func, __x64_sys_exit_group)
 #endif
-BTF_ID(func, do_exit)
 BTF_ID(func, do_group_exit)
 BTF_ID(func, kthread_complete_and_exit)
 BTF_ID(func, make_task_dead)
